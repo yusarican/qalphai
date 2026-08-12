@@ -68,7 +68,7 @@ export function profitFactor(v: number | null | undefined): string {
   return v.toFixed(2)
 }
 
-/** Prices span BTC at 118,000 and DOGE at 0.24 — precision follows magnitude. */
+/** Prices span BTC at 118,000 and XRP at 0.60 — precision follows magnitude. */
 export function price(v: number | null | undefined): string {
   if (!nz(v)) return DASH
   const abs = Math.abs(v)

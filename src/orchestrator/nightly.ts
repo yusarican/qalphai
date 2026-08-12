@@ -11,6 +11,7 @@ import { queriesForNight } from '../research/queries';
 import { selectPaper, type PaperPick } from '../research/selector';
 import { loadMeta } from '../strategy/loader';
 import { readChampion, promoteChampion, loadChampionSource, type ChampionRecord } from './champion';
+import { buildCandidateEvaluation, saveCandidateEvaluation } from './models';
 import { renderReport } from './report';
 import { diagnoseWeakness } from './weakness';
 import mechanicalV0 from '../strategy/builtin/mechanicalV0';
@@ -249,8 +250,26 @@ export async function runNightly(): Promise<NightlyResult> {
   let promoted = false;
   let championAfter = championBefore;
 
-  const championEval: EvaluatedRun | null = champResult?.ok ? champResult.evaluated! : null;
-  const verdict = candResult ? judge(candResult, championEval) : null;
+  // Sampiyon, kapiya TUM kosusuyla verilir (sadece ozetiyle degil): kapi onu da kendi
+  // kapisindan gecirdigi icin stres ve kasa sonuclari da lazim.
+  const championRun: ChallengeResult | null = champResult?.ok ? champResult : null;
+  const verdict = candResult ? judge(candResult, championRun) : null;
+
+  // Adayin degerlendirmesi, promote edilsin edilmesin diske yazilir. Kapiyi gecemeyen bir
+  // aday da operatorun listesinde durmali: kapi otomatik promosyonun bekcisidir, elle
+  // secimin yasakcisi degil (bkz. orchestrator/models.ts).
+  if (candResult && verdict && candidateSource) {
+    const ev = await buildCandidateEvaluation({
+      runId,
+      source: candidateSource,
+      result: candResult,
+      verdict,
+      symbols,
+      interval,
+      profile: 'balanced',
+    });
+    if (ev) saveCandidateEvaluation(runId, ev);
+  }
 
   if (verdict?.promote && candResult?.ok && candidateSource) {
     const meta = (await loadMeta(candidateSource)).meta;

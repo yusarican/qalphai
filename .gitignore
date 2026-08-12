@@ -25,10 +25,13 @@ serviceaccount.json
 /.cache/
 # Codex'in izole calisma dizini (her kosuda yaratilip silinir)
 /.codex-work/
-# Islenmis paper listesi, calisma aninda uretilir
-strategies/seen-papers.json
-strategies/candidates
-strategies/.DS_Store
+
+# --- Strateji durumu (tamami calisma aninda uretilir, makineye ozeldir) ---
+# champion.json / history / champions / candidates hepsini orchestrator yazar
+# (src/orchestrator/champion.ts, models.ts) ve dizini mkdirSync ile kendisi acar;
+# testler TMP dizin kullanir. Repoda sadece bos klasor iskeleti kalir.
+/strategies/*
+!/strategies/.gitkeep
 
 # --- Raporlar ---
 # Gece raporlari

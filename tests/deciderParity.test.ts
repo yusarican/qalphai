@@ -213,18 +213,18 @@ describe('decider paritesi: mechanicalV0 + portfolio == sample mechanicalDecider
     {
       name: 'coklu sembol, tahsis tavani devrede',
       args: {
-        symbols: ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT', 'DOGEUSDT'],
+        symbols: ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT', 'ADAUSDT'],
         indicators: {
           BTCUSDT: makeIndicators({ composite: 0.9 }),
           ETHUSDT: makeIndicators({ composite: 0.8 }),
           SOLUSDT: makeIndicators({ composite: -0.75 }),
           BNBUSDT: makeIndicators({ composite: 0.6 }),
           XRPUSDT: makeIndicators({ composite: -0.55 }),
-          DOGEUSDT: makeIndicators({ composite: 0.5 }),
+          ADAUSDT: makeIndicators({ composite: 0.5 }),
         },
         prices: {
           BTCUSDT: 50_000, ETHUSDT: 3_000, SOLUSDT: 150,
-          BNBUSDT: 600, XRPUSDT: 0.6, DOGEUSDT: 0.15,
+          BNBUSDT: 600, XRPUSDT: 0.6, ADAUSDT: 0.15,
         },
         params: BALANCED_PARAMS,
         profile: 'balanced',

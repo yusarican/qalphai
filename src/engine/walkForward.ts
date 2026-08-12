@@ -1,4 +1,5 @@
 import { calculateMetrics, EMPTY_RESULTS } from './backtestMetrics';
+import { MAX_DRAWDOWN_PCT, requiredPositiveWindows } from './riskLimits';
 import type { BacktestResults, BacktestTrade, EquityPoint, WalkForwardVerdict } from '../lib/types';
 
 /**
@@ -153,8 +154,8 @@ export function deriveVerdict(args: {
   if (args.fallbackUsed) return 'FAILED';
   if (args.test.totalPnlPercent <= 0) return 'FAILED';
 
-  const enoughWindows = args.windowsPositive >= Math.ceil(0.75 * args.windowCount);
-  const ddOk = args.test.maxDrawdownPercent <= 40;
+  const enoughWindows = args.windowsPositive >= requiredPositiveWindows(args.windowCount);
+  const ddOk = args.test.maxDrawdownPercent <= MAX_DRAWDOWN_PCT;
 
   return enoughWindows && ddOk ? 'ROBUST' : 'FRAGILE';
 }

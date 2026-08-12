@@ -14,6 +14,8 @@
  *    Codex, maliyet altinda olen yuksek-frekansli stratejileri promote etmeye calisir.
  */
 
+import { MAX_DRAWDOWN_PCT } from './riskLimits';
+
 export interface ScoringSliceMetrics {
   totalPnlPercent: number;
   maxDrawdownPercent: number; // pozitif buyukluk (12.5 = -%12.5 drawdown)
@@ -55,7 +57,7 @@ export type DqReason =
  */
 export const DQ_LABELS: Record<DqReason, string> = {
   LIKIDASYON: 'Liquidated (drawdown >= 100%)',
-  TEST_DD: 'Test drawdown > 40%',
+  TEST_DD: `Test drawdown > ${MAX_DRAWDOWN_PCT}%`,
   AZ_ISLEM: 'Fewer than 20 test trades',
   TRAIN_NEGATIF: 'Negative train P&L',
   MALIYET_YIYOR: 'Costs eat the edge (fees + funding > 50% of gross profit)',
@@ -139,7 +141,7 @@ export function scoreGrid(cells: ScoringCell[], trainRatio: number): ScoredCell[
     const feeShare = test.feeShareOfGross ?? 0;
 
     if (c.results.maxDrawdownPercent >= 100) scored[i]!.dq = 'LIKIDASYON';
-    else if (test.maxDrawdownPercent > 40) scored[i]!.dq = 'TEST_DD';
+    else if (test.maxDrawdownPercent > MAX_DRAWDOWN_PCT) scored[i]!.dq = 'TEST_DD';
     else if (test.totalTrades < 20) scored[i]!.dq = 'AZ_ISLEM';
     else if (train.totalPnlPercent < 0) scored[i]!.dq = 'TRAIN_NEGATIF';
     else if (feeShare > MAX_FEE_SHARE) scored[i]!.dq = 'MALIYET_YIYOR';

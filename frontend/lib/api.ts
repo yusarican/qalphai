@@ -258,6 +258,69 @@ export interface PortfolioSaveResult {
   openOnDisabled: { symbol: string; side: Side }[]
 }
 
+/* ------------------------------------------------------------------ models --- */
+
+/** The promotion gate's verdict on a model. Shown, never enforced, on this screen. */
+export interface ModelGate {
+  promote: boolean
+  blockers: string[]
+  warnings: string[]
+  /** Would the CURRENT champion pass the same gate today? null when not evaluated. */
+  incumbentQualified: boolean | null
+}
+
+export interface ModelEvaluation {
+  verdict: string
+  testPnlPct: number
+  testMar: number
+  testMaxDDPct: number
+  testTrades: number
+  windowsPositive: number
+  windowCount: number
+  stressPnlPct: number
+  holdoutPnlPct: number
+  holdoutMaxDDPct: number
+  qualifiedNeighbors: number
+  feeShareOfGross: number
+}
+
+export interface ModelListing {
+  id: string
+  origin: "builtin" | "candidate" | "champion"
+  name: string
+  strategyId: string
+  version: number
+  author: "human" | "codex"
+  codePath: string
+  codeSha256: string
+  isChampion: boolean
+  /** false → cannot be activated; blockedReason says why (missing code, sha mismatch). */
+  runnable: boolean
+  blockedReason?: string
+  params: Record<string, number | boolean>
+  risk: Record<string, number>
+  symbols: string[]
+  interval: string
+  profile: string
+  provenance?: { arxivId?: string; arxivTitle?: string; hypothesis?: string }
+  /** null for the builtin: it never sat an exam, and inventing numbers would be worse. */
+  evaluation: ModelEvaluation | null
+  gate: ModelGate | null
+  at: number
+  activatedBy?: "gate" | "operator"
+}
+
+export interface ActivateResult {
+  champion: { id: string; name: string; version: number }
+  activatedBy: "gate" | "operator"
+  /** false → the operator knowingly picked a model the gate rejected. */
+  gatePassed: boolean
+  gate: ModelGate | null
+  /** Positions carried over. Switching models never closes anything. */
+  inheritedPositions: { symbol: string; side: Side }[]
+  liveEnabled: boolean
+}
+
 /* ---------------------------------------------------------------- backtest --- */
 
 /**
@@ -493,6 +556,18 @@ export const api = {
     request<PortfolioSaveResult>("/portfolio", {
       method: "PUT",
       body: JSON.stringify({ disabled }),
+    }),
+
+  models: () => request<{ models: ModelListing[] }>("/models"),
+  /**
+   * Make a model the champion. Deliberately bypasses the promotion gate — that is the
+   * point of the screen — but the engine records `activatedBy: "operator"` and keeps
+   * the gate's verdict on the record, so no report can later read a manual pick as an
+   * approval. Open positions are carried over, never closed.
+   */
+  activateModel: (id: string) =>
+    request<ActivateResult>(`/models/${encodeURIComponent(id)}/activate`, {
+      method: "POST",
     }),
 
   backtestRuns: () =>

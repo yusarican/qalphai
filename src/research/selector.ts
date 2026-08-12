@@ -181,13 +181,16 @@ export async function selectPaper(
   const considered = pool.slice(0, env.llm.maxPapers);
 
   if (!llmConfigured()) {
-    return fallback(considered, 'LLM_API_KEY yok');
+    return fallback(considered, 'LLM_BASE_URL bos');
   }
 
   try {
     const shortlist = await triage(considered);
     if (shortlist.length === 0) {
-      return { pick: null, note: `${considered.length} makale triajdan gecti, hicbiri uygulanabilir degil` };
+      return {
+        pick: null,
+        note: `${considered.length} makale triajdan gecirildi, hicbiri uygulanabilir degil`,
+      };
     }
 
     const finalists = shortlist.slice(0, FINALIST_COUNT);
@@ -263,7 +266,11 @@ async function triageBatch(batch: ArxivPaper[], index: number): Promise<BatchRes
       system: TRIAGE_SYSTEM,
       user: `${batch.length} makale:\n\n${listing}`,
       schema: triageSchema,
-      maxTokens: 4_096,
+      // 20 makale x (skor + tek cumle) ~1.5k token cikti; gerisi dusunce payi.
+      maxTokens: 8_192,
+      // Triaj sig bir istir: her makaleye tek soru sorulur. Derin dusunme burada
+      // gecenin token butcesini 15 grupla carparak yakar, kararı iyilestirmez.
+      reasoningEffort: 'low',
       label: `triaj ${index + 1} (${batch.length} makale)`,
     });
 
@@ -303,7 +310,11 @@ async function finalPick(finalists: Triaged[]): Promise<PaperPick | null> {
     system: FINAL_SYSTEM,
     user: `${finalists.length} aday:\n\n${listing}`,
     schema: finalSchema,
-    maxTokens: 2_048,
+    maxTokens: 8_192,
+    // Gecenin TEK gercek yargi ani: 6 adayi karsilastirip uygulama acisini yazmak.
+    // Burada dusunmeye kisitlama koymuyoruz — tek cagri, ve ciktisi Codex'in brief'ine
+    // giriyor.
+    reasoningEffort: 'high',
     label: `final secim (${finalists.length} aday)`,
   });
 

@@ -62,8 +62,9 @@ export const env = {
    * digeri gunde ~300 abstract okuyup eleme yapar. Ikincisi ucuz ve genis baglamli
    * olmali; ayni modeli iki ise kosmak, secim asamasini gereksiz pahalilastirir.
    *
-   * apiKey bos ise LLM secici DEVRE DISI kalir ve gece deterministik siralayiciya
-   * duser — sistem anahtarsiz da kosar, sadece daha kor kosar.
+   * baseUrl bos ise LLM secici DEVRE DISI kalir ve gece deterministik siralayiciya
+   * duser — sistem modelsiz de kosar, sadece daha kor kosar. (Kapatma anahtari adres,
+   * apiKey degil: proxy anahtarsiz da cevap veriyor.)
    */
   llm: {
     baseUrl: str('LLM_BASE_URL', 'https://api.interneteco.systems/v1'),
@@ -91,7 +92,7 @@ export const env = {
   },
 
   nightly: {
-    symbols: list('SYMBOLS', ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT', 'DOGEUSDT']),
+    symbols: list('SYMBOLS', ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT']),
     interval: str('CANDLE_INTERVAL', '4h') as CandleInterval,
     backtestDays: num('BACKTEST_DAYS', 540),
     /**

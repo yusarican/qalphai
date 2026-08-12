@@ -116,7 +116,7 @@ describe('selectPaper', () => {
     expect(note).toContain('deterministik');
   });
 
-  it('anahtar yoksa LLM cagrisi hic yapilmaz', async () => {
+  it('secici kapaliyken LLM cagrisi hic yapilmaz', async () => {
     llmConfigured.mockReturnValue(false);
 
     const { pick } = await selectPaper([paper('1')], new Set());

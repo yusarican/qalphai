@@ -57,6 +57,7 @@ function LadderMark({ className }: { className?: string }) {
 
 const NAV = [
   { href: "/", label: "Live" },
+  { href: "/models", label: "Models" },
   { href: "/portfolio", label: "Portfolio" },
   { href: "/backtest", label: "Backtest" },
   { href: "/reports", label: "Reports" },

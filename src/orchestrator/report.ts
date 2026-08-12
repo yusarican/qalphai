@@ -1,6 +1,7 @@
 import { DQ_LABELS } from '../engine/gridScoring';
 import { exitBreakdown } from './weakness';
 import type { ChallengeResult } from '../engine/challenge';
+import { plateau } from '../engine/promotion';
 import type { PromotionVerdict } from '../engine/promotion';
 import type { ChampionRecord } from './champion';
 import type { PaperPick } from '../research/selector';
@@ -91,7 +92,11 @@ export function renderReport(a: ReportArgs): string {
   p(`| positive windows | ${v(a.champ, (c) => `${c.evaluated!.windowsPositive}/${c.evaluated!.windowCount}`)} | ${v(a.cand, (c) => `${c.evaluated!.windowsPositive}/${c.evaluated!.windowCount}`)} |`);
   p(`| **cost stress** | ${v(a.champ, (c) => pct(c.stress!.totalPnlPercent))} | ${v(a.cand, (c) => pct(c.stress!.totalPnlPercent))} |`);
   p(`| **HOLDOUT** (never seen) | ${v(a.champ, (c) => pct(c.holdout!.totalPnlPercent))} | ${v(a.cand, (c) => pct(c.holdout!.totalPnlPercent))} |`);
-  p(`| plateau (qualifying neighbours) | ${v(a.champ, (c) => String(c.evaluated!.qualifiedNeighbors))} | ${v(a.cand, (c) => String(c.evaluated!.qualifiedNeighbors))} |`);
+  // Plato satiri hem yerel hem grid genelini gosterir: eski rapor yalnizca nitelikli
+  // komsu sayisini yazdigi icin, reddi tetikleyen sayi (diskalifiye komsular) tabloda
+  // GORUNMUYORDU — aday kazanmis gibi duruyor, karar aciklanamiyordu.
+  p(`| plateau (neighbourhood) | ${v(a.champ, plateauCell)} | ${v(a.cand, plateauCell)} |`);
+  p(`| grid qualified | ${v(a.champ, gridCell)} | ${v(a.cand, gridCell)} |`);
   p();
 
   // --- Promosyon karari
@@ -112,6 +117,19 @@ export function renderReport(a: ReportArgs): string {
       p('### Blockers');
       p();
       for (const b of a.verdict.blockers) p(`- **${b}**`);
+      p();
+    }
+    if (a.verdict.warnings.length) {
+      p('### Warnings (did not block promotion)');
+      p();
+      for (const w of a.verdict.warnings) p(`- ${w}`);
+      p();
+    }
+    // Bir adayin reddedilmesi, yerinde kalanin dogrulanmasi ANLAMINA GELMEZ. Rapor bu
+    // ikisini ayirmazsa "champion kept" satiri her gece sessizce guven uretir.
+    if (a.verdict.incumbentQualified === false) {
+      p('> **The incumbent does not pass its own gate today.** Keeping it is the default,');
+      p('> not a verdict in its favour — see the warning above.');
       p();
     }
   }
@@ -180,3 +198,16 @@ function v(r: ChallengeResult | null, f: (c: ChallengeResult) => string): string
 }
 
 const pct = (n: number) => `${n >= 0 ? '+' : ''}${n.toFixed(1)}%`;
+
+/** "17.5% of 143 (4.1x grid)" — plato sartinin GERCEKTEN baktigi sayilar. */
+function plateauCell(c: ChallengeResult): string {
+  const e = c.evaluated!;
+  const p = plateau(e);
+  return `${(p.localRate * 100).toFixed(1)}% of ${p.hood} (${p.lift.toFixed(1)}x grid)`;
+}
+
+function gridCell(c: ChallengeResult): string {
+  const e = c.evaluated!;
+  const rate = e.gridTotal > 0 ? (e.gridQualified / e.gridTotal) * 100 : 0;
+  return `${e.gridQualified}/${e.gridTotal} (${rate.toFixed(1)}%)`;
+}

@@ -35,21 +35,45 @@ export interface ChatArgs {
   user: string;
   /** Varsayilan 0: makale secimi bir yaraticilik isi degil, yargi isi. */
   temperature?: number;
+  /**
+   * DUSUNCE TOKEN'LARI DA BU BUTCEDEN HARCANIR.
+   *
+   * gemini-3.6-flash bir "thinking" modeli: iki satirlik bir cevap icin bile birkac yuz
+   * token dusunebiliyor ve bu, `max_tokens` icinden gidiyor. Butce dar olursa model
+   * dusunurken biter — `finish_reason: length` ve YARIM ya da BOS bir JSON doner.
+   * Bu yuzden varsayilan comert tutuldu; model zaten kisa cevap veriyorsa fazlasi
+   * harcanmaz.
+   */
   maxTokens?: number;
+  /**
+   * `low` dusunmeyi kisar, `minimal` neredeyse tamamen kapatir. Sig ve tekrarli isler
+   * (grup triaji) icin dusuk; asil yargi gerektiren tek secim icin varsayilan.
+   */
+  reasoningEffort?: 'minimal' | 'low' | 'medium' | 'high';
   /** Etiket yalnizca loglama icin — hangi asamanin token yaktigi gorunsun. */
   label?: string;
 }
 
 interface ChatCompletion {
-  choices?: Array<{ message?: { content?: string } }>;
-  usage?: { prompt_tokens?: number; completion_tokens?: number };
+  choices?: Array<{ message?: { content?: string }; finish_reason?: string }>;
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    completion_tokens_details?: { reasoning_tokens?: number };
+  };
 }
 
 const MAX_ATTEMPTS = 3;
 
-/** LLM yapilandirilmis mi? Degilse cagiran taraf deterministik yola dusmeli. */
+/**
+ * LLM yapilandirilmis mi? Degilse cagiran taraf deterministik yola dusmeli.
+ *
+ * Olcut ANAHTAR degil ADRES: proxy anahtarsiz da cevap veriyor ve anahtar sartina
+ * baglamak, calisan bir kurulumu bos bir env satiri yuzunden kor moda dusururdu.
+ * LLM'i kapatmak isteyen LLM_BASE_URL'i bosaltir.
+ */
 export function llmConfigured(): boolean {
-  return env.llm.apiKey !== '';
+  return env.llm.baseUrl !== '';
 }
 
 export async function chat(args: ChatArgs): Promise<string> {
@@ -82,20 +106,21 @@ export async function chatJson<T>(
 
 async function chatRaw(args: ChatArgs, json: boolean): Promise<string> {
   if (!llmConfigured()) {
-    throw new LlmError('LLM_API_KEY tanimli degil');
+    throw new LlmError('LLM_BASE_URL tanimli degil');
   }
 
   const url = `${env.llm.baseUrl.replace(/\/+$/, '')}/chat/completions`;
   const body: Record<string, unknown> = {
     model: env.llm.model,
     temperature: args.temperature ?? 0,
-    max_tokens: args.maxTokens ?? 4096,
+    max_tokens: args.maxTokens ?? 8_192,
     messages: [
       { role: 'system', content: args.system },
       { role: 'user', content: args.user },
     ],
   };
   if (json) body.response_format = { type: 'json_object' };
+  if (args.reasoningEffort) body.reasoning_effort = args.reasoningEffort;
 
   let lastErr: unknown;
 
@@ -103,22 +128,51 @@ async function chatRaw(args: ChatArgs, json: boolean): Promise<string> {
     try {
       const res = await axios.post<ChatCompletion>(url, body, {
         headers: {
-          Authorization: `Bearer ${env.llm.apiKey}`,
           'Content-Type': 'application/json',
+          // Proxy anahtarsiz da cevap veriyor; anahtar varsa gonderilir, yoksa
+          // bos bir Bearer basligi gondermenin anlami yok.
+          ...(env.llm.apiKey ? { Authorization: `Bearer ${env.llm.apiKey}` } : {}),
         },
         timeout: env.llm.timeoutMs,
       });
 
-      const content = res.data.choices?.[0]?.message?.content;
-      if (!content) throw new LlmError('model bos cevap dondu');
+      const choice = res.data.choices?.[0];
+      const content = choice?.message?.content;
+      const u = res.data.usage;
+
+      /**
+       * `length` = model butceyi bitirdi. Dusunce token'lari da bu butceden gittigi icin
+       * bu, "cevap uzun oldu"dan cok "model dusunurken bitti" anlamina gelir ve geriye
+       * yarim JSON kalir. Ayni istegi tekrarlamak ayni yere varir — max_tokens veya
+       * reasoningEffort ayarlanmali. Sessizce yarim JSON ayristirmaya calismaktansa
+       * NEDENINI soyleyerek dusuyoruz.
+       */
+      if (choice?.finish_reason === 'length') {
+        const think = u?.completion_tokens_details?.reasoning_tokens;
+        throw new LlmError(
+          `cevap token butcesine (${body.max_tokens}) takildi` +
+            (think ? ` — ${think} token dusunmeye gitti` : '') +
+            '; maxTokens artirilmali veya reasoningEffort dusurulmeli',
+        );
+      }
+
+      if (!content?.trim()) throw new LlmError('model bos cevap dondu');
 
       if (args.label) {
-        const u = res.data.usage;
-        console.log(`     [llm] ${args.label}: ${u?.prompt_tokens ?? '?'} in / ${u?.completion_tokens ?? '?'} out`);
+        const think = u?.completion_tokens_details?.reasoning_tokens;
+        console.log(
+          `     [llm] ${args.label}: ${u?.prompt_tokens ?? '?'} in / ${u?.completion_tokens ?? '?'} out` +
+            (think ? ` (${think} dusunce)` : ''),
+        );
       }
       return content;
     } catch (err) {
       lastErr = err;
+
+      // Protokol hatalari (bos cevap, butce asimi) DETERMINISTIK: temperature 0 ile ayni
+      // istek ayni yere varir. Yeniden denemek yalnizca gecikme ve token yakar.
+      if (err instanceof LlmError) break;
+
       const status = (err as AxiosError).response?.status;
 
       /**

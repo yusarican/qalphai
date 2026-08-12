@@ -1,10 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { challenge, judge, sha256, type ChallengeResult } from '../src/engine/challenge';
+import { DEFAULT_GRID, type GridSpec } from '../src/engine/backtest';
+import { buildCandidateEvaluation, saveCandidateEvaluation } from '../src/orchestrator/models';
 import { loadMeta } from '../src/strategy/loader';
 import mechanicalV0 from '../src/strategy/builtin/mechanicalV0';
 import { env, type CandleInterval } from '../src/config/env';
-import type { EvaluatedRun } from '../src/engine/promotion';
 import type { StrategyProfile } from '../src/lib/types';
 import type { Strategy } from '../src/strategy/types';
 
@@ -12,11 +13,30 @@ import type { Strategy } from '../src/strategy/types';
  * Bir adayi sampiyona karsi yaristirir — gece dongusunun kalbi, elle kosulabilir hali.
  *
  *   npx tsx scripts/challenge.ts strategies/candidates/smoke/strategy.ts
+ *
+ * Risk eksenleri genisletilebilir (kapi, kazanan hucre grid'in KENARINDA oturdugunda
+ * uyarir — o zaman olculen sey "en iyi parametre" degil, "bakmayi biraktigimiz yer"dir):
+ *
+ *   npx tsx scripts/challenge.ts <aday.ts> --sl 0.8,1.5,2.2,3
+ *
+ * Bu bayraklar BU KOSUYA ozeldir; gece dongusunun varsayilanlarini (DEFAULT_GRID)
+ * degistirmez. Genis gridin daha iyi oldugu gorulurse degisiklik oraya tasinmalidir.
  */
 
 function arg(name: string, fallback?: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
   return i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : fallback;
+}
+
+/** `--sl 0.8,1.5,2.2,3` -> [0.8, 1.5, 2.2, 3]. Verilmezse DEFAULT_GRID ekseni. */
+function numList(name: string, fallback: readonly number[]): number[] {
+  const raw = arg(name);
+  if (!raw) return [...fallback];
+  const out = raw.split(',').map((s) => Number(s.trim()));
+  if (out.length === 0 || out.some((n) => !Number.isFinite(n))) {
+    throw new Error(`--${name} virgulle ayrilmis sayilar olmali, alinan: ${raw}`);
+  }
+  return out;
 }
 
 const DAY = 86_400_000;
@@ -35,12 +55,29 @@ async function main(): Promise<void> {
   const interval = (arg('interval', env.nightly.interval) ?? '4h') as CandleInterval;
   const profile = (arg('profile', 'balanced') ?? 'balanced') as StrategyProfile;
 
+  const grid: GridSpec = {
+    rewardRatios: numList('rr', DEFAULT_GRID.rewardRatios),
+    slMultipliers: numList('sl', DEFAULT_GRID.slMultipliers),
+    callbackMultipliers: numList('cb', DEFAULT_GRID.callbackMultipliers),
+    riskPerTradePcts: numList('risk', DEFAULT_GRID.riskPerTradePcts),
+  };
+  const riskCells =
+    grid.rewardRatios.length *
+    grid.slMultipliers.length *
+    grid.callbackMultipliers.length *
+    grid.riskPerTradePcts.length;
+
   const endDate = Date.now();
   const startDate = endDate - days * DAY;
   const holdoutStart = endDate - holdoutDays * DAY;
 
   console.log(`\nADAY     : ${path.basename(path.dirname(file))}/${path.basename(file)}`);
   console.log(`Semboller: ${symbols.join(', ')} | ${interval} | profil ${profile}`);
+  console.log(
+    `Risk grid: ${riskCells} hucre | RR ${grid.rewardRatios.join(',')} | ` +
+      `SL ${grid.slMultipliers.join(',')} | CB ${grid.callbackMultipliers.join(',')} | ` +
+      `risk ${grid.riskPerTradePcts.join(',')}`,
+  );
   console.log(`Secim    : ${iso(startDate)} -> ${iso(holdoutStart)}  (grid + walk-forward burada)`);
   console.log(`KASA     : ${iso(holdoutStart)} -> ${iso(endDate)}  (secim bunu HIC gormez)\n`);
 
@@ -67,6 +104,7 @@ async function main(): Promise<void> {
     symbols, interval, startDate, endDate, holdoutDays,
     initialBalance: 10_000,
     profile,
+    grid,
     onProgress: progress('sampiyon'),
   });
   process.stdout.write('\r' + ' '.repeat(70) + '\r');
@@ -81,6 +119,7 @@ async function main(): Promise<void> {
     symbols, interval, startDate, endDate, holdoutDays,
     initialBalance: 10_000,
     profile,
+    grid,
     onProgress: progress('aday'),
   });
   process.stdout.write('\r' + ' '.repeat(70) + '\r');
@@ -94,8 +133,7 @@ async function main(): Promise<void> {
   report('ADAY', candResult);
 
   // --- KAPI
-  const championEval: EvaluatedRun | null = champResult.ok ? champResult.evaluated! : null;
-  const verdict = judge(candResult, championEval);
+  const verdict = judge(candResult, champResult.ok ? champResult : null);
 
   console.log('\n' + '='.repeat(64));
   console.log(`PROMOSYON KAPISI: ${verdict.promote ? 'GECTI — sampiyon degisiyor' : 'REDDEDILDI — sampiyon korunuyor'}`);
@@ -108,6 +146,32 @@ async function main(): Promise<void> {
   if (verdict.blockers.length) {
     console.log('\nENGELLER:');
     for (const b of verdict.blockers) console.log(`  x ${b}`);
+  }
+  if (verdict.warnings.length) {
+    console.log('\nUYARILAR (reddi tetiklemez):');
+    for (const w of verdict.warnings) console.log(`  ! ${w}`);
+  }
+  if (verdict.incumbentQualified === false) {
+    console.log('\n  >>> SAMPIYON BUGUN KENDI KAPISINDAN GECEMIYOR. Adayin reddi,');
+    console.log('  >>> sampiyonun dogrulanmasi ANLAMINA GELMEZ.');
+  }
+
+  // --- Degerlendirmeyi diske yaz: aday, reddedilmis olsa da operatorun model listesinde
+  //     gorunsun ve oradan elle secilebilsin (orchestrator/models.ts).
+  const runId = path.basename(path.dirname(file));
+  const ev = await buildCandidateEvaluation({
+    runId,
+    source,
+    result: candResult,
+    verdict,
+    symbols,
+    interval,
+    profile,
+  });
+  if (ev) {
+    saveCandidateEvaluation(runId, ev);
+    console.log(`\nDegerlendirme kaydedildi: strategies/candidates/${runId}/evaluation.json`);
+    console.log('Model listesinde gorunur ve panelden elle secilebilir.');
   }
   console.log();
 }

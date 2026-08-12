@@ -41,6 +41,26 @@ export interface ChampionRecord {
   promotedFromRunId: string;
   provenance?: { arxivId?: string; arxivTitle?: string; hypothesis?: string };
 
+  /**
+   * Bu kayit nasil olustu?
+   *
+   *   'gate'     — promosyon kapisi onayladi (gece dongusu).
+   *   'operator' — panelden ELLE secildi; kapi calistirilmadi veya hukmu bypass edildi.
+   *
+   * Alan opsiyonel cunku bu ayrim eklenmeden once yazilmis kayitlar var; okurken
+   * 'gate' varsayilir (o donemde elle secim yoktu, dolayisiyla dogru varsayim).
+   */
+  activatedBy?: 'gate' | 'operator';
+
+  /**
+   * Kapinin bu model hakkindaki SON hukmu — elle secimde de saklanir.
+   *
+   * Elle secim kapiyi bypass eder, ama hukmu SILMEZ: "operator kapiyi gecemeyen bir
+   * modeli bilerek secti" ile "kapi bu modeli onayladi" ayri seylerdir ve denetim izinde
+   * ayri gorunmelidir.
+   */
+  gate?: { promote: boolean; blockers: string[]; warnings: string[]; incumbentQualified: boolean | null };
+
   evaluation: {
     verdict: string;
     testPnlPct: number;

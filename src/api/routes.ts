@@ -8,6 +8,7 @@ import { PROFILES, MAX_LEVERAGE } from '../engine/portfolio';
 import { computeLiveStats, readTrades } from '../lib/tradeLog';
 import { readState } from '../lib/liveState';
 import { readChampion } from '../orchestrator/champion';
+import { activateModel, listModels } from '../orchestrator/models';
 import { publicGet } from '../services/binanceClient';
 import * as ex from '../services/binanceOrders';
 import { readPortfolio, writePortfolio } from '../config/portfolio';
@@ -278,6 +279,62 @@ api.put('/portfolio', async (req, res, next) => {
       openOnDisabled: stillOpen.map((p) => ({ symbol: p.symbol, side: p.side })),
     });
   } catch (err) {
+    return next(err);
+  }
+});
+
+/* ---------------------------------------------------------------- model --- */
+
+/**
+ * Canliya alinabilecek TUM modeller: builtin + gecmis sampiyonlar + degerlendirilmis
+ * adaylar. Her satirda kapinin o model hakkindaki hukmu de doner — elle secim kapiyi
+ * bypass eder ama operator neyi bypass ettigini GORMELIDIR.
+ */
+api.get('/models', async (_req, res, next) => {
+  try {
+    res.json({ models: await listModels() });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * Bir modeli elle canliya alir.
+ *
+ * ACIK POZISYONLARA DOKUNMAZ: defter sampiyon degistiginde pozisyonlari korur
+ * (lib/liveState.ts:94), yalnizca cikis/cooldown gecmisi silinir. Yeni model devraldigi
+ * pozisyonlari yonetmeye (breakeven/TP/SL) devam eder.
+ *
+ * Canli islem otomatik ACILMAZ: secim "bundan sonra bu strateji" demektir, "para riske
+ * et" demez. Ikincisi panelden ayrica acilir.
+ */
+api.post('/models/:id/activate', async (req, res, next) => {
+  try {
+    const id = String(req.params.id);
+    const champBefore = await loadLiveChampion();
+    const openBefore = readState(champBefore.id).positions;
+
+    const { record, gatePassed } = await activateModel(id);
+
+    return res.json({
+      champion: { id: `${record.strategyId}@${record.version}`, name: record.name, version: record.version },
+      activatedBy: record.activatedBy,
+      /** false ise: operator kapiyi gecemeyen bir modeli bilerek secti. */
+      gatePassed,
+      gate: record.gate ?? null,
+      /**
+       * Devralinan acik pozisyonlar. Panel bunu sessizce gecmemeli: pozisyonlar kapanmadi
+       * ve artik YENI model tarafindan yonetiliyor.
+       */
+      inheritedPositions: openBefore.map((p) => ({ symbol: p.symbol, side: p.side })),
+      liveEnabled: record.live.enabled,
+    });
+  } catch (err) {
+    // Aktivasyon hatalari operator hatasidir (yanlis id, kodu degismis model), 500 degil.
+    const message = err instanceof Error ? err.message : String(err);
+    if (/bulunamadi|zaten canlida|canliya alinamaz|degisti/.test(message)) {
+      return res.status(400).json({ error: message });
+    }
     return next(err);
   }
 });

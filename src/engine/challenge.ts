@@ -241,6 +241,11 @@ export async function challenge(args: ChallengeArgs): Promise<ChallengeResult> {
       });
       args.onProgress?.('kasa', 1, 1);
 
+      // Plato sarti mutlak komsu sayisina degil, komsulugun grid GENELINE gore
+      // temizligine bakar (bkz. promotion.plateau) — bu yuzden grid geneli de lazim.
+      const gridTotal = selection.scored?.length ?? selection.cells.length;
+      const gridQualified = selection.scored?.reduce((n, s) => n + (s.dq ? 0 : 1), 0) ?? 0;
+
       const evaluated: EvaluatedRun = {
         verdict: selection.verdict,
         qualified: !selection.fallbackUsed,
@@ -249,6 +254,9 @@ export async function challenge(args: ChallengeArgs): Promise<ChallengeResult> {
         windowCount: selection.plan.windows.length,
         qualifiedNeighbors: scoredBest?.qualifiedNeighborCount ?? 0,
         dqNeighbors: scoredBest?.dqNeighborCount ?? 0,
+        gridQualified,
+        gridTotal,
+        ...boundary(selection.axes, scoredBest?.idx),
         codeSha256,
         entrySignature: entrySignature(selection),
       };
@@ -270,25 +278,58 @@ export async function challenge(args: ChallengeArgs): Promise<ChallengeResult> {
   }
 }
 
-/** Adayi sampiyonla karsilastirip promosyon hukmu verir. */
+/**
+ * Adayi sampiyonla karsilastirip promosyon hukmu verir.
+ *
+ * Sampiyon bir ChallengeResult olarak verilir (sadece EvaluatedRun degil): kapi artik
+ * sampiyonu da KENDI kapisindan gecirdigi icin onun stres ve kasa sonuclari da lazim.
+ * Sampiyon bu gece yeniden kosuldugu icin ikisi de zaten elimizde.
+ */
 export function judge(
   candidate: ChallengeResult,
-  champion: EvaluatedRun | null,
+  champion: ChallengeResult | null,
 ): PromotionVerdict {
   if (!candidate.ok || !candidate.evaluated || !candidate.stress || !candidate.holdout) {
     return {
       promote: false,
       reasons: [],
       blockers: [`aday degerlendirilemedi: ${candidate.failure ?? 'bilinmeyen'}`],
+      warnings: [],
+      incumbentQualified: null,
     };
   }
 
   return evaluatePromotion({
-    champion,
+    champion: champion?.evaluated ?? null,
+    championStress: champion?.stress ?? null,
+    championHoldout: champion?.holdout ?? null,
     challenger: candidate.evaluated,
     challengerStress: candidate.stress,
     holdout: candidate.holdout,
   });
+}
+
+/**
+ * Kazanan hucre, kac eksende grid'in KENARINDA oturuyor?
+ *
+ * Yalnizca uzunlugu >= 3 olan eksenler sayilir: 2 degerli bir eksende her hucre zaten
+ * kenardadir, yani o eksen bu soru hakkinda bilgi tasimaz.
+ */
+function boundary(
+  axes: BacktestOutput['axes'],
+  idx: number[] | undefined,
+): { boundaryAxes: number; freeAxes: number } {
+  if (!idx) return { boundaryAxes: 0, freeAxes: 0 };
+
+  let boundaryAxes = 0;
+  let freeAxes = 0;
+  for (let d = 0; d < axes.length && d < idx.length; d++) {
+    const len = axes[d]!.values.length;
+    if (len < 3) continue;
+    freeAxes++;
+    if (idx[d] === 0 || idx[d] === len - 1) boundaryAxes++;
+  }
+  return { boundaryAxes, freeAxes };
 }
 
 // ---------------------------------------------------------------- yardimcilar

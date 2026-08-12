@@ -1,0 +1,45 @@
+# --- Bagimliliklar ---
+node_modules/
+
+# --- Build ciktilari ---
+dist/
+.next/
+*.tsbuildinfo
+
+# --- Ortam degiskenleri (.env.example repoda kalir) ---
+.env
+.env.*
+!.env.example
+
+# --- Firebase service account (gizli anahtar, ASLA repoya girmez) ---
+serviceaccount.json
+*serviceaccount*.json
+
+# --- Cache / uretilen veri (yeniden indirilebilir, repoya girmez) ---
+# NOT: bu desenler basina "/" ile KOKE SABITLENIR. Sabitlenmemis bir "reports/",
+# git icin "her derinlikteki reports/" demektir ve panelin frontend/app/reports/
+# sayfasini da sessizce yutar — dosya repoya hic girmez, Tailwind onu taramaz.
+# Yerel mum/funding cache
+/data/
+# Indikator serisi cache
+/.cache/
+# Codex'in izole calisma dizini (her kosuda yaratilip silinir)
+/.codex-work/
+# Islenmis paper listesi, calisma aninda uretilir
+strategies/seen-papers.json
+strategies/candidates
+strategies/.DS_Store
+
+# --- Raporlar ---
+# Gece raporlari
+/reports/
+# Heatmap ciktilari
+/output/
+
+# --- Yerel ornek/deneme dosyalari ---
+samplebackend/
+samplefrontend/
+samplecodexintegration.ts
+
+# --- Isletim sistemi ---
+.DS_Store

@@ -1,0 +1,30 @@
+{
+  // Sadece BIZIM yazdigimiz kod icin ek sertlik.
+  //
+  // noUncheckedIndexedAccess, `candles[i + 1]` sinifindaki off-by-one hatalarini yakalar —
+  // ve bu motorda bir off-by-one, sessiz bir LOOK-AHEAD hatasidir: strateji henuz kapanmamis
+  // mumu gorur, backtest muhtesem gorunur, canlida para kaybeder. Yani bu flag burada bir
+  // stil tercihi degil, dogruluk kontroludur.
+  //
+  // src/vendor/ disarida: oradaki indikator kutuphanesi sample'dan BIREBIR alindi ve uretimde
+  // dogrulanmis sayisal koddur. 100 yerde elle `!` eklemek, kazanacagi seyden cok daha fazla
+  // sayisal regresyon riski getirir (altin fixture testinin korudugu tam da o sayilar).
+  //
+  // Kosum: npm run typecheck:strict
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noUncheckedIndexedAccess": true,
+    "noEmit": true
+  },
+  "include": [
+    "src/engine/**/*.ts",
+    "src/strategy/**/*.ts",
+    "src/lib/**/*.ts",
+    "src/config/**/*.ts",
+    "src/services/**/*.ts",
+    "src/research/**/*.ts",
+    "src/codex/**/*.ts",
+    "src/orchestrator/**/*.ts"
+  ],
+  "exclude": ["node_modules", "dist", "src/vendor"]
+}

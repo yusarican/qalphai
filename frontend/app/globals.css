@@ -1,0 +1,202 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
+
+/*
+ * qalphai operator console — instrument palette.
+ *
+ * The console is dark-only on purpose: it is read in a dim room, next to a chart,
+ * for long stretches. There is no light mode to keep in sync and no theme toggle to
+ * mis-render a P&L colour.
+ *
+ * Colour is rationed. Amber belongs to exactly two things — the champion's identity
+ * and the live-order state — so that a glance at the amber tells you whether real
+ * orders are going out. Jade and clay belong to P&L and to verdicts. Everything else
+ * is achromatic. A dashboard that paints every panel a different colour teaches the
+ * operator to ignore colour, which is the one thing that must stay loud here.
+ *
+ * The chart steps (--jade / --clay / --amber) are validated against the panel surface
+ * #10151E: OKLCH L inside 0.48–0.67, chroma >= 0.1, adjacent CVD deltaE 8.5 (deutan),
+ * contrast >= 3:1. The -ink steps are the brighter siblings used for text and badges,
+ * where WCAG text contrast governs instead.
+ */
+
+@theme inline {
+    --font-heading: var(--font-display);
+    --font-sans: var(--font-display);
+    --font-mono: var(--font-mono);
+
+    --color-ground: var(--ground);
+    --color-jade: var(--jade);
+    --color-jade-ink: var(--jade-ink);
+    --color-clay: var(--clay);
+    --color-clay-ink: var(--clay-ink);
+    --color-amber: var(--amber);
+    --color-amber-ink: var(--amber-ink);
+    --color-hairline: var(--hairline);
+
+    --color-sidebar-ring: var(--sidebar-ring);
+    --color-sidebar-border: var(--sidebar-border);
+    --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+    --color-sidebar-accent: var(--sidebar-accent);
+    --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+    --color-sidebar-primary: var(--sidebar-primary);
+    --color-sidebar-foreground: var(--sidebar-foreground);
+    --color-sidebar: var(--sidebar);
+    --color-chart-5: var(--chart-5);
+    --color-chart-4: var(--chart-4);
+    --color-chart-3: var(--chart-3);
+    --color-chart-2: var(--chart-2);
+    --color-chart-1: var(--chart-1);
+    --color-ring: var(--ring);
+    --color-input: var(--input);
+    --color-border: var(--border);
+    --color-destructive: var(--destructive);
+    --color-accent-foreground: var(--accent-foreground);
+    --color-accent: var(--accent);
+    --color-muted-foreground: var(--muted-foreground);
+    --color-muted: var(--muted);
+    --color-secondary-foreground: var(--secondary-foreground);
+    --color-secondary: var(--secondary);
+    --color-primary-foreground: var(--primary-foreground);
+    --color-primary: var(--primary);
+    --color-popover-foreground: var(--popover-foreground);
+    --color-popover: var(--popover);
+    --color-card-foreground: var(--card-foreground);
+    --color-card: var(--card);
+    --color-foreground: var(--foreground);
+    --color-background: var(--background);
+
+    --radius-sm: calc(var(--radius) * 0.6);
+    --radius-md: calc(var(--radius) * 0.8);
+    --radius-lg: var(--radius);
+    --radius-xl: calc(var(--radius) * 1.4);
+    --radius-2xl: calc(var(--radius) * 1.8);
+    --radius-3xl: calc(var(--radius) * 2.2);
+    --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+:root,
+.dark {
+    --radius: 0.5rem;
+
+    --ground: #080b10;
+    --background: #0a0d13;
+    --foreground: #e7ebf3;
+
+    --card: #10151e;
+    --card-foreground: #e7ebf3;
+    --popover: #141a25;
+    --popover-foreground: #e7ebf3;
+
+    --primary: #e7ebf3;
+    --primary-foreground: #0a0d13;
+    --secondary: #1a2130;
+    --secondary-foreground: #e7ebf3;
+
+    --muted: #161c27;
+    --muted-foreground: #7b8698;
+    --accent: #1a2130;
+    --accent-foreground: #e7ebf3;
+
+    --hairline: #1e2634;
+    --border: #1e2634;
+    --input: #232c3d;
+    --ring: #465064;
+
+    /* Chart steps — validated on surface #10151E. */
+    --jade: #0fae7f;
+    --clay: #e5533d;
+    --amber: #be8a24;
+
+    /* Text / badge steps — brighter siblings of the same hues. */
+    --jade-ink: #3ddcaa;
+    --clay-ink: #ff8672;
+    --amber-ink: #e3ae4a;
+
+    --destructive: #e5533d;
+
+    /*
+     * Magnitude bars (exit reasons, skip rules) are one hue stepped light-to-dark,
+     * never a rainbow: the thing being encoded is size, not identity.
+     */
+    --chart-1: #7f92b5;
+    --chart-2: #6b7da0;
+    --chart-3: #58688a;
+    --chart-4: #465475;
+    --chart-5: #354160;
+
+    --sidebar: #10151e;
+    --sidebar-foreground: #e7ebf3;
+    --sidebar-primary: #e7ebf3;
+    --sidebar-primary-foreground: #0a0d13;
+    --sidebar-accent: #1a2130;
+    --sidebar-accent-foreground: #e7ebf3;
+    --sidebar-border: #1e2634;
+    --sidebar-ring: #465064;
+}
+
+@layer base {
+    * {
+        @apply border-border outline-ring/50;
+    }
+
+    html {
+        @apply font-sans;
+        background-color: var(--ground);
+    }
+
+    body {
+        @apply bg-background text-foreground;
+        font-feature-settings: "cv11", "ss01";
+    }
+
+    /*
+     * Every figure in this console is read in a column against the figure above it.
+     * Proportional digits make "1.11" narrower than "8.88" and the column stops
+     * being scannable, so all numerics are tabular by default.
+     */
+    .tnum {
+        font-variant-numeric: tabular-nums;
+        font-feature-settings: "tnum";
+    }
+}
+
+@layer components {
+    /*
+     * The eyebrow: a small monospaced caps label that names a region or a figure.
+     * It is the console's structural device — every panel and every metric is
+     * introduced by one, so the eye can find the label without reading the value.
+     */
+    .eyebrow {
+        @apply font-mono text-[10px] font-medium tracking-[0.14em] text-muted-foreground uppercase;
+    }
+}
+
+/*
+ * The live pulse. Only rendered when the engine is actually sending orders, so the
+ * one moving thing on the page always means the same thing.
+ */
+@keyframes qa-pulse {
+    0%,
+    100% {
+        opacity: 1;
+        transform: scale(1);
+    }
+    50% {
+        opacity: 0.35;
+        transform: scale(0.82);
+    }
+}
+
+.qa-pulse {
+    animation: qa-pulse 2s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .qa-pulse {
+        animation: none;
+    }
+}

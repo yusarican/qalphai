@@ -1,0 +1,47 @@
+{
+  "name": "tradecraftai",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Her gun kendini gelistiren mekanik quant karar motoru",
+  "main": "dist/index.js",
+  "engines": {
+    "node": ">=20.11"
+  },
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "nightly:once": "tsx src/orchestrator/nightly.ts --once",
+    "live:once": "tsx scripts/liveOnce.ts",
+    "backtest": "tsx scripts/backtest.ts",
+    "sync": "tsx scripts/syncData.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck:strict": "tsc -p tsconfig.strict.json"
+  },
+  "dependencies": {
+    "axios": "^1.7.9",
+    "better-sqlite3": "^11.7.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "fast-xml-parser": "^4.5.1",
+    "firebase-admin": "^13.0.2",
+    "node-cron": "^3.0.3",
+    "nodemailer": "^6.9.16",
+    "sharp": "^0.33.5",
+    "typescript": "^5.7.2",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.10.5",
+    "@types/node-cron": "^3.0.11",
+    "@types/nodemailer": "^6.4.17",
+    "tsx": "^4.19.2",
+    "vitest": "^2.1.8"
+  }
+}

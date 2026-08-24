@@ -288,11 +288,20 @@ export async function listModels(): Promise<ModelListing[]> {
   }
 
   // --- 2. Builtin. Promosyon kaydi yoksa canlida kosan odur.
-  if (!seen.has(BUILTIN_ID)) {
-    const meta = (await loadMeta(fs.readFileSync(BUILTIN_PATH, 'utf8'))).meta;
+  //
+  // Builtin de SHA ile tekillestirilir. Elle aktive edildiginde promosyon kaydi olarak
+  // (`<strategyId>@<version>`) listelenir ve o kaydin id'si BUILTIN_ID ile hicbir zaman
+  // esitlenmez — yalnizca id'ye bakmak ayni kodu listede iki satir olarak gosterirdi
+  // (biri "Mechanical V0" builtin, digeri "Mechanical V0" sampiyon).
+  const builtinSource = fs.readFileSync(BUILTIN_PATH, 'utf8');
+  const builtinSha = sha256(builtinSource);
+
+  if (!seen.has(BUILTIN_ID) && !seenSha.has(builtinSha)) {
+    const meta = (await loadMeta(builtinSource)).meta;
     const params: Record<string, number | boolean> = {};
     for (const p of meta.params) params[p.key] = p.default;
 
+    seenSha.add(builtinSha);
     out.push({
       id: BUILTIN_ID,
       origin: 'builtin',
@@ -301,7 +310,7 @@ export async function listModels(): Promise<ModelListing[]> {
       version: 0,
       author: 'human',
       codePath: BUILTIN_PATH,
-      codeSha256: sha256(fs.readFileSync(BUILTIN_PATH, 'utf8')),
+      codeSha256: builtinSha,
       isChampion: currentId === BUILTIN_ID,
       runnable: true,
       params,
@@ -356,9 +365,11 @@ export async function listModels(): Promise<ModelListing[]> {
         continue;
       }
 
-      // Bu aday zaten promote edilmisse sampiyon kaydi olarak listelendi — tekrar
-      // gosterme (bkz. listModels basi).
+      // Bu kod zaten listelendi mi: sampiyon/gecmis kaydi olarak, builtin olarak veya
+      // baska bir aday dizininde (ayni strateji iki gece kosusunda yeniden uretilebilir).
+      // Tekrar gosterme (bkz. listModels basi).
       if (ev.codeSha256 && seenSha.has(ev.codeSha256)) continue;
+      if (ev.codeSha256) seenSha.add(ev.codeSha256);
 
       const check = checkCode(codePath, ev.codeSha256);
       out.push({

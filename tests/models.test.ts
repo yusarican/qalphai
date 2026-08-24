@@ -194,6 +194,46 @@ describe('elle aktivasyon', () => {
     expect(models.some((m) => m.id === 'candidate:gece-1')).toBe(false);
   });
 
+  it('elle aktive edilen BUILTIN listede IKI KEZ gorunmez', async () => {
+    // Builtin de promote edildiginde iki yerde birden var olur: kaynak dosyasinda
+    // (BUILTIN_ID) ve promosyon kaydinda (mechanical-v0@1). id'leri asla esitlenmez,
+    // dolayisiyla tekillestirme burada da SHA uzerinden olmali — yoksa operator ayni
+    // stratejiyi iki satir gorur.
+    writeCandidate('gece-1');
+    await activateModel('candidate:gece-1'); // builtin'i sampiyonluktan dusur
+    await activateModel(BUILTIN_ID); // builtin'i ELLE geri al
+
+    const models = await listModels();
+    const builtinSha = sha256(BASE_SOURCE);
+    const sameCode = models.filter((m) => m.codeSha256 === builtinSha);
+
+    expect(sameCode).toHaveLength(1);
+    // Kalan satir, kodu immutable dizine kopyalanmis ve sha'si dogrulanan surumdur.
+    expect(sameCode[0]!.origin).toBe('champion');
+    expect(sameCode[0]!.isChampion).toBe(true);
+    expect(models.some((m) => m.id === BUILTIN_ID)).toBe(false);
+  });
+
+  it('ayni kodu tasiyan iki aday listede tek satir olur', async () => {
+    // Gece dongusu ayni stratejiyi iki kosuda yeniden uretebilir. Dizinler farkli,
+    // kod ayni — "ayni kod = ayni model".
+    writeCandidate('gece-1');
+    const dir = path.join(TMP, 'candidates', 'gece-2');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'strategy.ts'), sourceFor('gece-1'));
+    saveCandidateEvaluation('gece-2', {
+      ...JSON.parse(
+        fs.readFileSync(path.join(TMP, 'candidates', 'gece-1', 'evaluation.json'), 'utf8'),
+      ),
+      runId: 'gece-2',
+    } satisfies CandidateEvaluation);
+
+    const models = await listModels();
+    const sameCode = models.filter((m) => m.codeSha256 === sha256(sourceFor('gece-1')));
+
+    expect(sameCode).toHaveLength(1);
+  });
+
   it('promote EDILMEMIS baska bir aday listede kalir', async () => {
     writeCandidate('gece-1');
     writeCandidate('gece-2');

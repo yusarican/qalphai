@@ -16,6 +16,7 @@ import { loadChampionSource, readChampion, type ChampionRecord } from '../orches
 import { loadMeta } from '../strategy/loader';
 import { ensureFunding, ensureKlines, getKlines, openReadOnly, INTERVAL_MS } from '../lib/klineStore';
 import {
+  countSkippedBars,
   pruneExits,
   readState,
   writeState,
@@ -98,6 +99,15 @@ export interface LiveRunResult {
    * Bos degilse: bu kosu backtest'ten IRAKSADI ve sonuclari kiyaslanamaz.
    */
   divergences: LiveAction[];
+  /**
+   * Bu kosu ile bir oncekinin ARASINDA hic degerlendirilmemis kac karar bari var.
+   *
+   * Sifirdan buyukse motor o barlarda KAPALIYDI (surec dusmus, restart, deploy) ve o
+   * barlarin sinyalleri geri alinamaz — giris bardan sonra fiyat degismistir. Backtest
+   * her bari gorur, canli gormemistir: bu bir IRAKSAMADIR ve sessiz kalamaz. Ilk kosuda
+   * (defter bos) 0'dir; gecmis bir bar --at ile yeniden oynatilirken de 0'dir.
+   */
+  skippedBars: number;
 }
 
 export interface LiveRunArgs {
@@ -212,6 +222,15 @@ export async function runLiveOnce(args: LiveRunArgs): Promise<LiveRunResult> {
 
   const state = readState(champ.id);
   pruneExits(state, cooldownMs, at);
+
+  /**
+   * ARADA KAC BAR KACIRILDI. Defterin son isledigi bar ile bu bar arasindaki bosluk.
+   *
+   * Motor kapaliyken kapanan her mum, canlinin GORMEDIGI bir karar noktasidir; backtest
+   * onlarin hepsini gorur. Bosluk raporlanmazsa "hic islem acmiyor" sikayeti sinyal
+   * yoklugu gibi okunur — oysa sinyal kacirilmis olabilir.
+   */
+  const skippedBars = countSkippedBars(state.lastDecisionBar, at, ms);
 
   const actions: LiveAction[] = [];
 
@@ -336,6 +355,7 @@ export async function runLiveOnce(args: LiveRunArgs): Promise<LiveRunResult> {
     actions,
     unmanaged,
     divergences,
+    skippedBars,
   };
 }
 

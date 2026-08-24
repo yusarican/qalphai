@@ -50,6 +50,20 @@ export function formatDecisionReport(res: LiveRunResult): string[] {
     `  bakiye $${res.balance.toFixed(2)} | kullanilabilir margin $${res.availableMargin.toFixed(2)}`,
   );
 
+  /**
+   * BOSLUK, "hic islem acmiyor" sikayetinin en sinsi sebebidir: motor kapaliyken kapanan
+   * mumlarin karar noktalari HIC degerlendirilmez. Ekranda yalnizca en son bar gorunur,
+   * o barda sinyal yoktur ve strateji bozuk sanilir — oysa sinyal kacirilan barda vardi.
+   * Bu yuzden en uste, tahsislerin bile ustune yazilir.
+   */
+  if (res.skippedBars > 0) {
+    out.push(
+      `  [!] BOSLUK: ${res.skippedBars} karar bari hic degerlendirilmedi (motor o sirada kapaliydi).`,
+      '      O barlardaki sinyaller GECMISTE KALDI — girisleri sonradan almak yanlis fiyattan',
+      '      islem acmak olur. Bu kosu backtest ile kiyaslanabilirligini o barlar kadar kaybetti.',
+    );
+  }
+
   // --- 1) EVREN. Bos ise digerlerini okumanin anlami yok: karar hic sorulmadi.
   if (res.symbols.length === 0) {
     out.push(

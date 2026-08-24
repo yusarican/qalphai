@@ -1,7 +1,10 @@
 import cron from 'node-cron';
 import { runNightly } from './nightly';
 import { runLiveOnce } from '../engine/liveExecutor';
+import { currentDecisionBar } from '../engine/liveDecider';
 import { formatDecisionReport } from '../engine/liveReport';
+import { INTERVAL_MS } from '../lib/klineStore';
+import { readLastDecisionBar } from '../lib/liveState';
 import { env, type CandleInterval } from '../config/env';
 
 /**
@@ -55,6 +58,12 @@ const LIVE_CRON: Record<CandleInterval, string> = {
 
 let liveRunning = false;
 
+/** Acilis yakalamasinin en erken bekleyecegi sure — surec daha yeni ayaga kalkti. */
+const BOOT_CATCHUP_DELAY_MS = 5_000;
+
+/** Cron ile ayni pay: Binance kapanan mumu servis edene kadar bekle. */
+const BAR_SETTLE_MS = 60_000;
+
 /**
  * CANLI EXECUTION ZAMANLAYICISI — her mum kapanisinda.
  *
@@ -66,42 +75,96 @@ export function startLiveScheduler(): void {
   const interval = env.nightly.interval;
   const expr = LIVE_CRON[interval];
 
-  cron.schedule(
-    expr,
-    () => {
-      // Yeniden giris kilidi: bir kosu bir sonraki mumu asarsa ikinci bir surec AYNI
-      // karar barinda ikinci kez emir gondermeye kalkmasin.
-      if (liveRunning) {
-        console.warn('[canli] onceki kosu hala devam ediyor, bu tetikleme atlandi');
-        return;
-      }
-      liveRunning = true;
-
-      void runLiveOnce({ dryRun: !env.live.enabled })
-        .then((res) => {
-          // Kararin TAMAMI loglanir — tahsis, veto, bekleyen sembol, atlanan kapi. "0
-          // pozisyon" tek basina bir tesbit degildir: sebebi yazilmazsa saglikli bir
-          // "sinyal yok" ile bozuk bir yapilandirma ayni gorunur.
-          for (const line of formatDecisionReport(res)) console.log(`[canli] ${line}`);
-
-          // Backtest'in aldigi ama borsanin aldirmadigi pozisyon: bu kosu artik
-          // backtest'i temsil etmiyor. Rapor satirlarinin arasinda kaybolmamali.
-          for (const d of res.divergences) {
-            console.warn(`[canli] IRAKSAMA: ${d.symbol} ${d.side} — ${d.reason} (backtest bunu ALIRDI)`);
-          }
-        })
-        .catch((err) => {
-          // Canli kosu duserse SAMPIYONA VE DEFTERE DOKUNULMAZ. Bir sonraki mumda
-          // mutabakat zaten borsayi tekrar okuyup defteri duzeltecek.
-          console.error('[canli] HATA:', err instanceof Error ? err.message : err);
-        })
-        .finally(() => {
-          liveRunning = false;
-        });
-    },
-    { timezone: 'Etc/UTC' },
-  );
+  cron.schedule(expr, () => runLiveTick('mum kapanisi'), { timezone: 'Etc/UTC' });
 
   const mode = env.live.enabled ? 'EMIR GONDERIR' : 'KURU KOSU (LIVE_TRADING=false)';
   console.log(`[canli] zamanlandi: ${expr} (UTC, ${interval} mum kapanisi) — ${mode}`);
+
+  catchUpOnBoot(interval);
+}
+
+/**
+ * ACILIS YAKALAMASI — cron tek basina YETMEZ.
+ *
+ * cron yalnizca surec AYAKTAYKEN gelen mum kapanislarini gorur. Surec 4h'lik bir mumun
+ * ortasinda ayaga kalkarsa (deploy, restart, cokme, laptop uykusu) motor bir sonraki
+ * tetiklemeye kadar — 4 saate kadar — GORME OZURLUDUR: o pencerede kapanan bar hic
+ * degerlendirilmez ve `lastDecisionBar` defterde durdugu halde kimse ona bakmaz.
+ *
+ * Bu, "model hic tradeye girmiyor"un sessiz sebebidir: panelde yalnizca en son kosu
+ * gorunur, o barda sinyal yoktur ve strateji bozuk sanilir.
+ *
+ * Yakalama YALNIZCA GUNCEL bari kosar, gecmis barlari YENIDEN OYNATMAZ. Kacirilan bir
+ * barin girisini bugunku fiyattan almak, backtest'in olctugu stratejiyi kosmak degildir
+ * (scripts/liveOnce.ts `--at` ile `--execute`i ayni sebeple yasaklar). Kacirilan barlar
+ * geri getirilemez; yapilabilecek tek durust sey onlari SAYIP raporlamaktir.
+ */
+function catchUpOnBoot(interval: CandleInterval): void {
+  const bar = currentDecisionBar(interval);
+  const last = readLastDecisionBar();
+
+  if (last >= bar) {
+    console.log('[canli] acilis: guncel bar zaten islenmis, yakalama gerekmiyor');
+    return;
+  }
+
+  if (last > 0) {
+    const missed = Math.max(0, Math.round((bar - last) / INTERVAL_MS[interval]) - 1);
+    if (missed > 0) {
+      console.warn(
+        `[canli] acilis: ${missed} karar bari motor kapaliyken kapandi ` +
+          `(son islenen ${new Date(last).toISOString()}). O barlarin sinyalleri KACIRILDI.`,
+      );
+    }
+  }
+
+  // Bar yeni kapandiysa cron ile ayni payi bekle: Binance kapanan mumu birkac saniye
+  // gecikmeyle servis eder ve eksik mumla karar vermek sessizce yanlis karar vermektir.
+  const delay = Math.max(BOOT_CATCHUP_DELAY_MS, bar + BAR_SETTLE_MS - Date.now());
+  console.log(
+    `[canli] acilis: ${new Date(bar).toISOString()} bari icin yakalama kosusu ` +
+      `${Math.round(delay / 1000)} sn sonra`,
+  );
+
+  setTimeout(() => runLiveTick('acilis yakalamasi'), delay);
+}
+
+/**
+ * Tek bir canli kosu — cron da acilis yakalamasi da BURADAN gecer.
+ *
+ * Tek giris noktasi olmasi `liveRunning` kilidini anlamli kilar: iki farkli tetikleyici
+ * kendi kilidini tutsaydi, acilis yakalamasi ile mum kapanisi cakisip AYNI karar barinda
+ * iki kez emir gonderebilirdi.
+ */
+function runLiveTick(trigger: string): void {
+  // Yeniden giris kilidi: bir kosu bir sonraki mumu asarsa ikinci bir surec AYNI
+  // karar barinda ikinci kez emir gondermeye kalkmasin.
+  if (liveRunning) {
+    console.warn(`[canli] onceki kosu hala devam ediyor, ${trigger} tetiklemesi atlandi`);
+    return;
+  }
+  liveRunning = true;
+
+  void runLiveOnce({ dryRun: !env.live.enabled })
+    .then((res) => {
+      // Kararin TAMAMI loglanir — tahsis, veto, bekleyen sembol, atlanan kapi. "0
+      // pozisyon" tek basina bir tesbit degildir: sebebi yazilmazsa saglikli bir
+      // "sinyal yok" ile bozuk bir yapilandirma ayni gorunur.
+      console.log(`[canli] tetikleyici: ${trigger}`);
+      for (const line of formatDecisionReport(res)) console.log(`[canli] ${line}`);
+
+      // Backtest'in aldigi ama borsanin aldirmadigi pozisyon: bu kosu artik
+      // backtest'i temsil etmiyor. Rapor satirlarinin arasinda kaybolmamali.
+      for (const d of res.divergences) {
+        console.warn(`[canli] IRAKSAMA: ${d.symbol} ${d.side} — ${d.reason} (backtest bunu ALIRDI)`);
+      }
+    })
+    .catch((err) => {
+      // Canli kosu duserse SAMPIYONA VE DEFTERE DOKUNULMAZ. Bir sonraki mumda
+      // mutabakat zaten borsayi tekrar okuyup defteri duzeltecek.
+      console.error('[canli] HATA:', err instanceof Error ? err.message : err);
+    })
+    .finally(() => {
+      liveRunning = false;
+    });
 }

@@ -115,6 +115,28 @@ function RunReport({
 
       <CardContent className="flex flex-col gap-4">
         {/*
+          A gap is the quietest way this engine can look broken. Bars that closed while
+          the process was down are never evaluated, so their signals are simply gone —
+          and all the operator sees is a recent run with no entry, which reads as "the
+          strategy never trades" rather than "the engine wasn't watching".
+        */}
+        {result.skippedBars > 0 ? (
+          <Alert variant="destructive">
+            <AlertTriangleIcon />
+            <AlertTitle>
+              {result.skippedBars} {result.skippedBars === 1 ? "bar was" : "bars were"}{" "}
+              never evaluated
+            </AlertTitle>
+            <AlertDescription>
+              The engine was down while {result.skippedBars === 1 ? "that bar" : "those bars"}{" "}
+              closed, so any signal on {result.skippedBars === 1 ? "it" : "them"} was
+              missed. Those entries cannot be taken now — the price has moved on. The
+              backtest saw every bar; this run did not.
+            </AlertDescription>
+          </Alert>
+        ) : null}
+
+        {/*
           Divergence is the loudest thing this panel can say. It means the exchange
           refused something the backtest would have taken, so this run and the measured
           strategy are no longer the same strategy — and the live numbers stop being

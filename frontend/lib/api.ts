@@ -222,6 +222,8 @@ export interface LiveRunResult {
   unmanaged: string[]
   /** Positions the backtest would have taken and the exchange refused. */
   divergences: LiveAction[]
+  /** Decision bars that closed while the engine was down and were never evaluated. */
+  skippedBars: number
 }
 
 /* --------------------------------------------------------------- portfolio --- */

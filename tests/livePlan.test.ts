@@ -3,7 +3,13 @@ import { EXCHANGE_ONLY_SKIPS, planActions, type PlanInput } from '../src/engine/
 import { DEFAULT_RISK_PARAMS } from '../src/engine/riskManagement';
 import { ZERO_COSTS } from '../src/engine/costModel';
 import { floorToStep, roundToTick } from '../src/services/binanceOrders';
-import { inCooldown, readState, type LedgerPosition, type LiveState } from '../src/lib/liveState';
+import {
+  countSkippedBars,
+  inCooldown,
+  readState,
+  type LedgerPosition,
+  type LiveState,
+} from '../src/lib/liveState';
 import { currentDecisionBar } from '../src/engine/liveDecider';
 import type { Allocation } from '../src/engine/portfolio';
 import type { SymbolFilters } from '../src/services/binanceOrders';
@@ -318,6 +324,32 @@ describe('canli defter + karar bari', () => {
     // Tam sinirda: bar HENUZ acildi, karar ani tam olarak odur.
     const edge = Date.UTC(2026, 5, 6, 20, 0, 0);
     expect(currentDecisionBar('4h', edge)).toBe(edge);
+  });
+
+  /**
+   * Motor kapaliyken kapanan barlar canlinin HIC gormedigi karar noktalaridir; backtest
+   * onlari gorur. Bu sayi yanlis olursa bosluk ya sessizce yutulur (0 raporlanir ve
+   * "sinyal yok" ile ayirt edilemez) ya da her saglikli kosuda sahte alarm calar.
+   */
+  it('bosluk sayaci: yalnizca ARADA kalan barlari sayar', () => {
+    const H4 = 4 * 3_600_000;
+    const t0 = Date.UTC(2026, 5, 6, 0, 0, 0);
+
+    // Bitisik barlar: bosluk YOK.
+    expect(countSkippedBars(t0, t0 + H4, H4)).toBe(0);
+
+    // Bir bar atlandi (00:00 islendi, 04:00 kacti, 08:00 kosuluyor).
+    expect(countSkippedBars(t0, t0 + 2 * H4, H4)).toBe(1);
+
+    // Bir gunluk kesinti = 5 kacirilmis bar.
+    expect(countSkippedBars(t0, t0 + 6 * H4, H4)).toBe(5);
+
+    // Bos defter (ilk kosu) bir bosluk DEGILDIR — oncesi tarih, kesinti degil.
+    expect(countSkippedBars(0, t0 + 6 * H4, H4)).toBe(0);
+
+    // Gecmis bar yeniden oynatiliyor (--at): ileri gidilmedi, bosluk yok.
+    expect(countSkippedBars(t0, t0 - 3 * H4, H4)).toBe(0);
+    expect(countSkippedBars(t0, t0, H4)).toBe(0);
   });
 });
 

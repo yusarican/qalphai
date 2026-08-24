@@ -97,6 +97,37 @@ export function readState(championId: string): LiveState {
   return s;
 }
 
+/**
+ * Defterin ISLEDIGI son karar bari — sampiyondan BAGIMSIZ okunur.
+ *
+ * Zamanlayici acilista "kacirilmis bar var mi" diye sorar ve bu soruyu sampiyonu
+ * yuklemeden (sha dogrulamasi, meta derlemesi, evren cozumu) cevaplayabilmelidir:
+ * yukleme patlarsa bile kacirilan bar sayisi loglanabilmeli.
+ */
+export function readLastDecisionBar(): number {
+  if (!fs.existsSync(FILE)) return 0;
+  try {
+    const s = JSON.parse(fs.readFileSync(FILE, 'utf8')) as Partial<LiveState>;
+    return typeof s.lastDecisionBar === 'number' ? s.lastDecisionBar : 0;
+  } catch {
+    // Bozuk defter: "hic kosulmamis" say. Fazladan bir yakalama kosusu zararsizdir,
+    // kacirilmis bir bar degildir.
+    return 0;
+  }
+}
+
+/**
+ * Defterin son isledigi bar ile `at` ARASINDA hic degerlendirilmemis kac bar var.
+ *
+ * Bitisik barlarda 0 dondurur — kacirilan bar, ARADA kalan bardir. Defter bossa
+ * (lastDecisionBar = 0) da 0'dir: ilk kosunun oncesi bir bosluk degildir, tarihtir.
+ * Gecmis bir bar yeniden oynatilirken (at <= last) de 0'dir.
+ */
+export function countSkippedBars(lastDecisionBar: number, at: number, intervalMs: number): number {
+  if (lastDecisionBar <= 0 || at <= lastDecisionBar || intervalMs <= 0) return 0;
+  return Math.max(0, Math.round((at - lastDecisionBar) / intervalMs) - 1);
+}
+
 export function writeState(s: LiveState): void {
   fs.mkdirSync(DATA_DIR, { recursive: true });
   fs.writeFileSync(FILE, JSON.stringify(s, null, 2));

@@ -75,6 +75,48 @@ export const env = {
     maxPapers: num('LLM_MAX_PAPERS', 240),
   },
 
+  /**
+   * MAIN ORCHESTRATOR — sistemin tamamini goren ust akil.
+   *
+   * Makale secicisinden (env.llm) ve Codex'ten (env.codex) AYRI tutulur, cunku isi
+   * baskadir: biri abstract eler, digeri kod yazar, bu ise KARAR verir — canliyi ve
+   * kutuphaneyi okur, otopsi yapar, gece arastirmasina yon verir. Tool cagirabilen bir
+   * modele ihtiyaci var; env.llm'in istemcisi (lib/llm.ts) tool desteklemiyor.
+   *
+   * VARSAYILAN KAPALI. `enabled=false` veya `apiKey` bos oldugunda orchestrator hic
+   * kurulmaz ve sistemin geri kalani bugunku davranisini BIT BIT korur — env.llm'in
+   * `llmConfigured()` deseninin aynisi (lib/llm.ts:75).
+   */
+  orchestrator: {
+    enabled: bool('ORCH_ENABLED', false),
+    provider: str('ORCH_PROVIDER', 'anthropic') as 'anthropic' | 'openai' | 'gemini',
+    model: str('ORCH_MODEL', 'claude-opus-5'),
+    /** Bos ise saglayicinin varsayilan adresi kullanilir (bkz. lib/providers/). */
+    baseUrl: str('ORCH_BASE_URL', ''),
+    apiKey: str('ORCH_API_KEY', ''),
+    timeoutMs: num('ORCH_TIMEOUT_MS', 300_000),
+    maxTokens: num('ORCH_MAX_TOKENS', 16_384),
+    /**
+     * Tek kosuda azami tool turu. Agent dongusu bir hedefe kilitlenip ayni tool'u
+     * tekrarlayabilir; bu fren, sonsuz donguyu BUTCE degil ADIM cinsinden keser.
+     */
+    maxSteps: num('ORCH_MAX_STEPS', 40),
+    /**
+     * Tek kosuda azami AGIR backtest. Bir grid kosusu dakikalar suruyor (backtest.ts:36);
+     * frensiz bir agent bir gecede CPU'yu tumuyle yiyebilir.
+     */
+    maxBacktests: num('ORCH_MAX_BACKTESTS', 6),
+    /** Kosu basina token freni (giris + cikis toplami). */
+    tokenBudget: num('ORCH_TOKEN_BUDGET', 2_000_000),
+    /** Gece dongusunden ONCE: o gecenin arastirmasina yon verecek zaman. */
+    preCron: str('ORCH_PRE_CRON', '0 1 * * *'),
+    /** Gece dongusunden SONRA: adayi ve raporu okuyup otopsi/varyant uretir. */
+    postCron: str('ORCH_POST_CRON', '30 6 * * *'),
+    /** Bos = web arama tool'u HIC kaydedilmez. */
+    webSearchProvider: str('ORCH_WEB_SEARCH_PROVIDER', '') as '' | 'brave' | 'tavily' | 'exa',
+    webSearchKey: str('ORCH_WEB_SEARCH_KEY', ''),
+  },
+
   codex: {
     model: str('CODEX_MODEL', 'gpt-5.6-sol'),
     reasoningEffort: str('CODEX_REASONING_EFFORT', 'high') as 'low' | 'medium' | 'high',

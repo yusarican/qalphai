@@ -12,7 +12,7 @@ alternative. Two independent packages: the engine at the repo root and the conso
 | Runtime | Node ≥ 20.11 — CommonJS on the engine, ESM in the console |
 | Engine dev/exec | `tsx` (watch + direct `.ts` execution), `tsc` for builds |
 | HTTP | Express 4 + `cors` |
-| Scheduling | `node-cron`, pinned to `Etc/UTC` |
+| Scheduling | `node-cron`, pinned to `Etc/UTC`; one FIFO for all heavy compute |
 | Storage | SQLite via `better-sqlite3` (WAL) + JSON / JSONL files |
 | Isolation | `node:worker_threads` + `node:vm` realms |
 | Static analysis | TypeScript Compiler API (AST walk + in-memory compile) |
@@ -21,9 +21,10 @@ alternative. Two independent packages: the engine at the repo root and the conso
 | XML | `fast-xml-parser` (arXiv Atom) |
 | AI — code | `codex app-server` over JSON-RPC on stdio, `gpt-5.6-sol`, effort `high` |
 | AI — selection | OpenAI-compatible route (LiteLLM proxy → `gemini-3.6-flash`) |
+| AI — orchestration | tool-calling over `axios`; Anthropic Messages · OpenAI `/chat/completions` · Gemini `generateContent` |
 | Market data | Binance USDⓈ-M Futures REST (public: mainnet · signed: testnet by default) |
 | Research source | arXiv Atom API (abstracts only) |
-| Tests | `vitest` 2 — 12 files, 159 tests |
+| Tests | `vitest` 2 — 17 files, 219 tests |
 | Console | Next.js 16 (App Router) · React 19 · Tailwind v4 · shadcn/ui on `@base-ui/react` |
 | Charts | Recharts 3 |
 | Console extras | `next-themes`, `sonner`, `lucide-react`, `react-markdown` + `remark-gfm`, `clsx`, `tailwind-merge`, `class-variance-authority` |
@@ -164,6 +165,54 @@ where attention is weakest, and the pick drifts toward the top of the list.
 `src/research/ranker.ts` is the keyword fallback, kept for when the proxy is down. Its own
 comments are the evidence log for why it was demoted.
 
+### Three model APIs, one shape
+
+`src/lib/agentLlm.ts` + `src/lib/providers/`. The orchestrator's loop knows none of the
+three vendors: a provider is two pure functions, `toCall(request)` and
+`fromResponse(data)`, and everything above them speaks one normalised message type.
+
+Still `axios`, not three SDKs — the same trade as the selector client, except the pressure
+is three times larger. What the abstraction actually buys is that the differences stay in
+one file each, and they are not cosmetic:
+
+- **Anthropic** carries tool calls as content blocks, which is what the internal shape
+  mirrors. `system` is a top-level field, not a message, and `anthropic-version` is
+  mandatory — omit it and the 400 says nothing about versions.
+- **OpenAI-compatible** splits one turn across several messages: tool calls hang off the
+  assistant message, and each result is its own `role: "tool"` message that must directly
+  follow it. `arguments` is a JSON *string*; passing an object degrades silently to empty
+  arguments.
+- **Gemini** gives function calls **no id** — a result matches by *name*, which is why the
+  internal `tool_result` block carries the tool name as well as the id. Its role is
+  `model`, not `assistant`. And its schema dialect is an OpenAPI subset: `additionalProperties`,
+  `$schema`, `default` and friends are rejected, with an error that does not name the
+  offending field. Schemas are pruned before they are sent (`sanitizeSchema`), because
+  without it the tool layer works everywhere else and fails wholesale here.
+
+Two behaviours are ported verbatim from `lib/llm.ts`, both hard-won: every failure must be
+recoverable (429/5xx/timeout retried with backoff, other 4xx dropped without a retry), and
+**a truncated turn is never parsed**. Thinking tokens come out of the same budget, so
+`max_tokens` usually means "the model ran out mid-thought", not "the answer was long" —
+and the three vendors spell it `max_tokens`, `length` and `MAX_TOKENS`.
+
+### AST surgery, not codegen
+
+`src/strategy/gateSurgery.ts` turns a strategy's veto rule into a swept boolean parameter,
+so *removing a filter* becomes a grid axis the existing scoring and plateau machinery
+already knows how to search.
+
+It reads with the TypeScript AST for the reason `validator.ts` does — a `return { veto:
+true }` either is that node or is not, where a regex both false-positives on comments and
+false-negatives on line breaks. But it **writes** by splicing text at node offsets rather
+than printing the AST back out, because the printer reformats the whole file: comments
+move, quotes change, the diff becomes unreadable. A machine-generated candidate that a
+human cannot review is a candidate nobody will review. Edits apply last-to-first so no
+insertion shifts an offset that a later one still needs.
+
+Where it cannot work it says so instead of guessing: a veto returned from a helper has no
+`ctx` in scope (the injected guard would not compile), and a computed `rule` has no
+statically knowable parameter name. Those are reported and handed to Codex.
+
 ### Binance: two clients on purpose
 
 - `binanceClient.ts` — **public** data, always from `fapi.binance.com` (mainnet), even when
@@ -278,9 +327,9 @@ unknown is how the next trade gets sized wrong.
 |---|---|
 | A trading library (ccxt et al.) | The cost model, exchange filters, idempotent orders and the ledger are the parts that had to be exactly right; a generic abstraction over them hides the specifics that cost money. |
 | An ORM / migration tool | Two tables of time series and a handful of JSON files. |
-| An LLM SDK | One call shape ("messages in, JSON out"); `axios` was already a dependency. |
+| An LLM SDK | Two call shapes ("messages in, JSON out"; "messages + tools in, tool calls out"). Three SDKs would triple the version surface to hide differences that have to be understood anyway — see *Three model APIs, one shape*. |
 | Docker / k8s | Single-node by design — the SQLite cache and the champion file are local, and the schedulers assume one writer. |
-| Redis / a job queue | Both long jobs are single-flight on one machine; an in-process lock is the honest expression of that. |
+| Redis / a job queue | Long jobs are single-flight on one machine. There are now three claimants rather than two, so they share one in-process FIFO (`engine/computeQueue.ts`) — still the honest expression of one CPU and one writer. |
 | A frontend state library | Server data with polling; `use-poll` plus local state is the whole requirement. |
 | Light mode | See above — an unvalidated second palette on a screen where colour carries P&L. |
 | A separate "simple" live decision path | The single most dangerous refactor available here: two paths that both pass their own tests while the measured strategy and the funded strategy quietly diverge. |

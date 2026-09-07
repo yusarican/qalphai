@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { challenge, judge, sha256, type ChallengeResult } from '../engine/challenge';
 import { DEFAULT_COSTS } from '../engine/costModel';
+import { runExclusive } from '../engine/computeQueue';
 import { ensureDataset } from '../engine/dataset';
 import { CodexDriver } from '../codex/driver';
 import { buildNewStrategyBrief, buildRefineBrief, buildRepairPrompt } from '../codex/prompts';
@@ -79,7 +80,8 @@ export async function runNightly(): Promise<NightlyResult> {
 
   let champResult: ChallengeResult | null = null;
   try {
-    champResult = await challenge({
+    champResult = await runExclusive('nightly', 'sampiyon yeniden kosumu', () =>
+      challenge({
       strategy: champStrategy,
       source: champSource,
       sandboxed: championBefore !== null, // builtin v0 sandbox'siz; promote edilmis aday sandbox'li
@@ -92,7 +94,8 @@ export async function runNightly(): Promise<NightlyResult> {
       profile: 'balanced',
       costs: DEFAULT_COSTS,
       ...(championBefore ? { fixedParams: championBefore.params } : {}),
-    });
+      }),
+    );
     stage(
       'champion',
       champResult.ok,
@@ -200,7 +203,8 @@ export async function runNightly(): Promise<NightlyResult> {
         // --- ONARIM DONGUSU: dogrulama/gauntlet hatalari AYNI thread'de geri beslenir
         //     (Codex reasoning context'ini korur). En fazla 2 onarim.
         for (let attempt = 0; attempt <= 2; attempt++) {
-          candResult = await challenge({
+          candResult = await runExclusive('nightly', `aday degerlendirme (tur ${attempt + 1})`, async () =>
+            challenge({
             strategy: await loadMeta(candidateSource!),
             source: candidateSource!,
             sandboxed: true,
@@ -212,7 +216,8 @@ export async function runNightly(): Promise<NightlyResult> {
             initialBalance: 10_000,
             profile: 'balanced',
             costs: DEFAULT_COSTS,
-          });
+            }),
+          );
 
           if (candResult.ok) break;
 

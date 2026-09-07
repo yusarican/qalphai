@@ -1,3 +1,4 @@
+import { directiveBlock } from '../orchestrator/directives';
 import type { ArxivPaper } from '../research/arxiv';
 import type { ChampionRecord } from '../orchestrator/champion';
 import type { BacktestResults } from '../lib/types';
@@ -15,6 +16,19 @@ import type { BacktestResults } from '../lib/types';
  *    oldugunu bilmesi, kapiyi KANDIRMASINI saglamaz (kapinin koduna erisimi yok, ve
  *    kasa penceresini goremez) — sadece dogru seyi hedeflemesini saglar. Ornegin
  *    "maliyet stresi" sartini bilen bir model, cok sik islem yapan bir strateji yazmaz.
+ *
+ * 3. YONLENDIRME KURALLARDAN ONCE GELIR (orchestrator/directives.ts). Ust akil gecenin
+ *    onceligini enjekte edebilir, ama blok HARD_RULES'tan ONCE yerlestirilir ve kendisi
+ *    "bu bir oncelik, izin degil" der. Sonra gelen kurallar son sozu soyler — ve o
+ *    kurallar zaten prompt'a degil validator/gauntlet/kapiya bagli.
+ *    Aktif yonlendirme yokken directiveBlock BOS STRING doner: brief karakter karakter
+ *    bugunku halinde kalir.
+ *
+ *    DIKKAT: bu yuzden enjeksiyon noktasi KENDI satir sonunu yutar
+ *    (`${directiveBlock(...)}${HARD_RULES}`, arada satir sonu YOK). Araya bir satir sonu
+ *    koymak, yonlendirme yokken bile brief'e fazladan bir bos satir ekler — tek karakter,
+ *    ama "acilmadikca hicbir sey degismez" sozu tam olarak boyle asinir. Blok bos
+ *    olmadiginda kendi bosluklarini kendisi tasir (directives.ts:directiveBlock).
  */
 
 const HARD_RULES = `
@@ -146,7 +160,7 @@ ${priorRead}
 
 3. Uygulanabiliyorsa \`candidate/strategy.ts\` dosyasini yaz.
 
-${HARD_RULES}
+${directiveBlock('codex-new')}${HARD_RULES}
 ${EVALUATION}
 
 ## Sozlesme
@@ -195,7 +209,7 @@ Bu zayifliga DOGRUDAN saldiran bir varyant yaz (\`candidate/strategy.ts\`).
 Sampiyonu kopyalayip tek bir sabiti degistirmek YETMEZ: sistem, sampiyonla sinyal
 ortusmesi %90'in uzerinde olan adaylari "ayni strateji, farkli sapka" diye reddeder.
 Giris mantiginda gercek bir degisiklik yap.
-
+${directiveBlock('codex-refine')}
 ${HARD_RULES}
 ${EVALUATION}
 `;

@@ -2,6 +2,7 @@ import vm from 'node:vm';
 import { parentPort, workerData } from 'node:worker_threads';
 import { buildStrategyContext } from '../../engine/context';
 import { allocate } from '../../engine/portfolio';
+import { liftVeto } from '../../engine/signalRunner';
 import { lastIndexBefore } from '../../engine/context';
 import type { RecordedDecision } from '../../engine/simulator';
 import type { Rejection } from '../../engine/portfolio';
@@ -156,6 +157,10 @@ function runRecordPass(job: WorkerJob): RecordedDecision[] {
   const paramsJson = JSON.stringify(job.params);
   const out: RecordedDecision[] = [];
 
+  // Karsi-olgusal olcum icin kaldirilan veto kurallari. Dongu basina degil IS basina
+  // bir kez kurulur; 3000+ karar noktasi x 6 sembolde Set kurmak olculebilir maliyet.
+  const lifted = job.liftedVetoRules?.length ? new Set(job.liftedVetoRules) : undefined;
+
   const btcKlines = init.klines['BTCUSDT'];
   const btcInd = init.indicators['BTCUSDT'];
 
@@ -205,12 +210,25 @@ function runRecordPass(job: WorkerJob): RecordedDecision[] {
       const d = JSON.parse(raw) as StrategyDecision;
       if (d === null) continue;
 
+      let sig: StrategySignal;
+
       if ('veto' in d && d.veto === true) {
-        rejections.push({ symbol, rule: String(d.rule).slice(0, 32), side: d.wouldBe });
-        continue;
+        // Kural kaldirilmissa veto bir sinyale doner — signalRunner ile AYNI fonksiyon,
+        // yani builtin sampiyonun ve Codex adayinin gate bilancosu ayni kuralla cikar.
+        const revived = liftVeto(
+          { ...d, rule: String(d.rule).slice(0, 32) },
+          lifted,
+          job.liftedConfidence,
+        );
+        if (!revived) {
+          rejections.push({ symbol, rule: String(d.rule).slice(0, 32), side: d.wouldBe });
+          continue;
+        }
+        sig = revived;
+      } else {
+        sig = d as StrategySignal;
       }
 
-      const sig = d as StrategySignal;
       if (
         (sig.side !== 'LONG' && sig.side !== 'SHORT') ||
         typeof sig.confidence !== 'number' ||

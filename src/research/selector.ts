@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { chatJson, llmConfigured } from '../lib/llm';
+import { directiveBlock } from '../orchestrator/directives';
 import { rankPapers } from './ranker';
 import { env } from '../config/env';
 import type { ArxivPaper } from './arxiv';
@@ -101,7 +102,7 @@ haline getirilebilir bir rejim filtresi varsa uygulanabilir. Sen bu farki gormek
 varsin.
 `;
 
-const TRIAGE_SYSTEM = `Sen bir kripto perpetual futures quant ekibinin arastirma triajcisisin.
+const triageSystem = (): string => `Sen bir kripto perpetual futures quant ekibinin arastirma triajcisisin.
 Sana arXiv'den gelen makalelerin baslik ve ozetleri veriliyor. Her biri icin TEK soruyu
 cevapliyorsun: bu makalenin one surdugu edge, bizim sozlesmemizde bir giris kuralina
 cevrilebilir mi?
@@ -118,12 +119,12 @@ Her makale icin ver:
 
 Comert davranma: cogu makale 0-3 almalidir. Yuksek skor, gecenin tamamini o makaleye
 harcayacagimiz anlamina gelir.
-
+${directiveBlock('paper-triage')}
 YALNIZCA su semada JSON dondur, baska hicbir metin yazma:
 {"papers":[{"n":<makale numarasi>,"feasible":<bool>,"score":<0-10>,"reason":"<tek cumle>"}]}
 Girdideki HER makale icin tam bir kayit dondur.`;
 
-const FINAL_SYSTEM = `Sen bir kripto perpetual futures quant ekibinin bas arastirmacisisin.
+const finalSystem = (): string => `Sen bir kripto perpetual futures quant ekibinin bas arastirmacisisin.
 On elemeden gecmis birkac makale veriliyor. GORevin: bu gece uzerinde calisilacak TEK
 makaleyi secmek ve onu uygulayacak muhendise hazir bir baslangic noktasi vermek.
 ${CONTRACT}
@@ -134,7 +135,7 @@ sisteme gercek bir FIKIR ekliyor (esik degeri oynatmaktan ibaret degil).
 
 Adaylarin HICBIRI sozlesmemize sigmiyorsa n=0 dondur. Bu bir basarisizlik degildir;
 uydurma bir secim yapmak, gecenin tamamini bosa harcamaktir.
-
+${directiveBlock('paper-final')}
 YALNIZCA su semada JSON dondur, baska hicbir metin yazma:
 {"n":<secilen makale numarasi, hicbiri uygunsa 0>,
  "score":<0-10 guven>,
@@ -263,7 +264,7 @@ async function triageBatch(batch: ArxivPaper[], index: number): Promise<BatchRes
 
   try {
     const out = await chatJson({
-      system: TRIAGE_SYSTEM,
+      system: triageSystem(),
       user: `${batch.length} makale:\n\n${listing}`,
       schema: triageSchema,
       // 20 makale x (skor + tek cumle) ~1.5k token cikti; gerisi dusunce payi.
@@ -307,7 +308,7 @@ async function finalPick(finalists: Triaged[]): Promise<PaperPick | null> {
     .join('\n\n---\n\n');
 
   const out = await chatJson({
-    system: FINAL_SYSTEM,
+    system: finalSystem(),
     user: `${finalists.length} aday:\n\n${listing}`,
     schema: finalSchema,
     maxTokens: 8_192,

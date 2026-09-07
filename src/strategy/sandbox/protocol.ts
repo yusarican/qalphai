@@ -32,6 +32,18 @@ export interface WorkerJob {
   params: Record<string, number | boolean>;
   profile: StrategyProfile;
   macroRiskAppetite: 'risk_on' | 'risk_off' | 'mixed' | null;
+
+  /**
+   * KARSI-OLGUSAL OLCUM (engine/gateAnalysis.ts). Adi gecen veto kurallari kaldirilir.
+   *
+   * Set DEGIL dizi: bu nesne worker'a structured-clone ile geciyor ve Set klonlanabilse
+   * de protokolun geri kalani duz JSON — sekli tek tip tutmak, ileride bir kanal
+   * degistiginde (JSON stringify) sessizce bos Set'e donusmesini onler.
+   *
+   * Verilmezse davranis bugunkuyle BIT BIT ayni (bkz. signalRunner.ts:53).
+   */
+  liftedVetoRules?: string[];
+  liftedConfidence?: number;
 }
 
 export type WorkerResult =

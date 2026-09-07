@@ -1,8 +1,8 @@
 # qalphai
 
 A mechanical quant engine that researches, writes, tests and promotes its own trading
-strategies — one cycle per night — plus the operator console it is watched and driven
-from.
+strategies — one cycle per night — plus an orchestrator that watches the whole thing,
+and the operator console it is all driven from.
 
 Every night the engine reads new arXiv papers, has Codex turn one of them into a
 sandboxed TypeScript strategy, puts that candidate through a static validator, a
@@ -47,6 +47,62 @@ nothing is treated as a bug, not as a quiet no-op.
 
 Output: `reports/nightly-YYYY-MM-DD.md`, plus the candidate and its evaluation under
 `strategies/candidates/<runId>/`.
+
+## The orchestrator
+
+`src/orchestrator/agent/`. The nightly loop asks one question — *what is on arXiv today?*
+The orchestrator asks the ones it cannot: is the live model degrading, is something in the
+library worth developing, did Codex miss something, and **which of a model's own filters
+are actually earning their keep**.
+
+It runs on its own schedule (`ORCH_PRE_CRON` before the night, `ORCH_POST_CRON` after),
+on a manual trigger from `/orchestrator`, or on its own when live performance breaches a
+threshold. Provider-agnostic: Anthropic, any OpenAI-compatible route, or Gemini
+(`src/lib/providers/`).
+
+**It cannot put anything live, and that is structural rather than requested.** There is no
+activation tool in its tool list. What it produces is written to
+`strategies/candidates/` and waits on `/models` behind the same two-click operator
+decision as everything else. What it *can* do unattended is steer the nightly research —
+reversible, and risking no money.
+
+| It can | It cannot |
+|---|---|
+| Backtest **any** model in the library, over any window | Change the champion |
+| Run a six-method autopsy on a period | Send an order |
+| Measure what every gate costs, in R | Weaken any wall — the validator, gauntlet and gate ignore its text |
+| Produce candidates (gate surgery, or a brief to Codex) | Promote one |
+| Inject directives into the nightly prompts | Loosen the rules those prompts carry |
+
+Off by default. With `ORCH_ENABLED=false` the rest of the system is byte-identical to
+before it existed — `tests/directives.test.ts` pins that, down to a single newline.
+
+## The gate balance
+
+`src/engine/gateAnalysis.ts`. The contract file has always told Codex that its veto rules
+would be measured — *"the system runs a counterfactual for every veto rule and reports in R
+whether the filter cost you money or saved you from a loss"* (`src/strategy/types.ts:182`).
+That code did not exist. Every night we asked for meaningful veto rules and measured none
+of them.
+
+It exists now, and it needed no new machinery: `StrategyVeto` already carries `wouldBe`,
+because the contract was designed for exactly this. Lifting a rule turns its veto into a
+signal in that direction and the rest of the pipeline — allocation, simulator, costs,
+intrabar resolution — runs untouched. One RECORD pass per rule; replay is already free.
+
+Three places it refuses to guess:
+
+- The confidence given to a lifted veto is an **assumption** (the model's own median
+  signal), and every report says so — a vetoed bar never produced a confidence.
+- A rule without `wouldBe` has **no counterfactual**. It is reported as unmeasurable with
+  the reason, never filled in with a direction.
+- If the baseline liquidated, **every verdict is meaningless** — −100% is a floor, so no
+  lifting can look worse and everything reads "neutral". The analysis says this in place
+  of its results rather than under them.
+
+```bash
+npx tsx scripts/gateReport.ts --days 300
+```
 
 ## The five walls
 
@@ -163,10 +219,11 @@ numbers as if they were fresh.
 | `npm run live:once` | evaluate the current bar — **dry run by default**; `-- --execute` sends orders |
 | `npm run backtest` | one backtest to stdout (`--days`, `--symbols`, `--no-costs`, `--single`) |
 | `npm run sync` | pull klines/funding into the local cache (`--intrabar` for 1m data) |
-| `npm test` | vitest — 12 files, 159 tests |
+| `npm test` | vitest — 17 files, 219 tests |
 | `npm run typecheck` / `typecheck:strict` | tsc, normal and strict profile |
 | `npx tsx scripts/parity.ts` | live-vs-backtest signal parity — the gate before any order |
 | `npx tsx scripts/challenge.ts <file>` | race one candidate against the champion by hand |
+| `npx tsx scripts/gateReport.ts` | what every gate costs, in R (`--model`, `--days`, `--risk-per-trade`) |
 | `npx tsx scripts/codexSmoke.ts` | end-to-end check of the Codex integration |
 
 ### Configuration
@@ -183,6 +240,7 @@ change behaviour most:
 | `NIGHTLY_CRON` | `30 2 * * *` | UTC, pinned — local time would drift a candle at DST. |
 | `LLM_*` | LiteLLM proxy / `gemini-3.6-flash` | The paper selector. Empty `LLM_BASE_URL` disables it and the night falls back to the deterministic ranker. |
 | `CODEX_MODEL` / `CODEX_REASONING_EFFORT` | `gpt-5.6-sol` / `high` | The candidate writer. 30-minute turn budget. |
+| `ORCH_*` | off / `anthropic` | The orchestrator. `ORCH_ENABLED=false` keeps it out of the process entirely. |
 | `FIREBASE_SERVICE_ACCOUNT_PATH` | `serviceaccount.json` | Loader exists and is wired to nothing yet (see *Known gaps*). |
 
 The console reads `NEXT_PUBLIC_API_URL`, which belongs in `frontend/.env.local` — not in
@@ -199,6 +257,7 @@ Next.js 16 / React 19 / Tailwind v4 / shadcn-ui, dark only. See
 | `/portfolio` | Which of the champion's symbols may take new entries |
 | `/backtest` | Put a strategy through the real gauntlet and read the verdict |
 | `/models` | What could go live — builtin, past champions, evaluated candidates — with the gate's verdict on each |
+| `/orchestrator` | What the orchestrator is doing, what it steered, what it produced |
 | `/reports` | The engine's own account of each nightly cycle |
 
 Two rules the console follows. **Every number comes from the engine** — win rate, profit
@@ -232,7 +291,20 @@ POST /backtest/runs              start a run (one at a time)
 GET  /backtest/runs/:id          progress, then the full report incl. the whole grid
 GET  /reports  ·  /reports/:name nightly reports
 POST /nightly/run                trigger a research cycle (202, fire-and-forget)
+GET  /orchestrator               status, compute queue, live-health trigger
+POST /orchestrator/run           start a run (202, fire-and-forget, single-flight)
+GET  /orchestrator/runs  ·  /:id history, then steps and tool calls
+GET  /orchestrator/directives    what is currently steering the nightly loop
+DEL  /orchestrator/directives/:id  revoke one
 ```
+
+`POST /backtest/runs` takes an optional `modelId` (anything from `/models`) and `endDate`.
+Without them it behaves exactly as before: the champion, ending now.
+
+Heavy work from all three claimants — the nightly loop, panel backtests and the
+orchestrator — passes through one FIFO (`src/engine/computeQueue.ts`) and its depth is on
+`/health`. Two grids on one CPU starve each other and corrupt the duration measurements;
+the three single-flight locks that already existed did not know about each other.
 
 ## Repo layout
 
@@ -241,29 +313,35 @@ src/
   index.ts            express app + both cron schedulers
   config/             env, portfolio (operator's on/off list), firebase loader
   orchestrator/       nightly loop, champion record, model ledger, report, weakness diagnosis
+    agent/            the orchestrator — loop, tools, system prompt, run state
+                      autopsy.ts (six methods) · directives.ts (nightly steering)
   research/           arXiv client, query rotation, LLM selector, keyword fallback ranker
   codex/              app-server JSON-RPC client, driver, isolated workspace, prompts
-  strategy/           the contract (types.ts), validator, sandbox host/worker, gauntlet
+  strategy/           the contract (types.ts), validator, sandbox host/worker, gauntlet,
+                      gate surgery (AST: turn a filter into a swept parameter)
     builtin/          mechanicalV0 — the seed champion, and Codex's worked example
   engine/             backtest grid, simulator, cost model, walk-forward, scoring,
-                      promotion gate, portfolio/risk, live decider/plan/executor
+                      promotion gate, portfolio/risk, live decider/plan/executor,
+                      gate balance (counterfactuals), market context, compute queue
   services/           binanceClient (public, mainnet) · binanceOrders (signed, testnet)
-  lib/                SQLite kline store, live ledger, trade log, LLM client, rate limiter
+  lib/                SQLite kline store, live ledger, trade log, LLM client, rate limiter,
+                      agentLlm + providers/ (tool-calling, three vendors), web search
   vendor/             technical indicators
 scripts/              backtest · challenge · liveOnce · parity · syncData · codexSmoke
-tests/                12 vitest files, incl. golden fixtures ported from the reference impl
+                      gateReport
+tests/                17 vitest files, incl. golden fixtures ported from the reference impl
 frontend/             the operator console (its own package.json)
 ```
 
 Runtime state, all gitignored and all regenerable: `data/market.db` (klines, funding, 1m
 intrabar), `data/live-state.json` (the ledger), `data/live-trades.jsonl` (append-only
-history), `data/backtests/`, `.cache/` (indicator series), `strategies/` (champion record,
+history), `data/backtests/`, `data/orchestrator/` (runs + directives), `.cache/` (indicator series), `strategies/` (champion record,
 immutable champion sources, candidates, seen papers), `reports/`, `.codex-work/`.
 
 ## Tests
 
 ```bash
-npm test        # 159 tests, ~10s
+npm test        # 219 tests, ~10s
 ```
 
 The suite covers the parts where a silent bug would be expensive rather than the parts that

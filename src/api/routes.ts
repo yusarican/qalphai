@@ -2,13 +2,34 @@ import { Router } from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
 import { getJob, isRunning, listRuns, readRun, startBacktest } from './backtestJobs';
-import { buildRiskCells, DEFAULT_GRID, MAX_CELLS, type GridSpec } from '../engine/backtest';
+import {
+  DEFAULT_GRID,
+  DEFAULT_MAX_SWEEP_CELLS,
+  MAX_CELLS,
+  buildRiskCells,
+  paramCellCount,
+  type GridSpec,
+} from '../engine/backtest';
 import { loadLiveChampion, runLiveOnce } from '../engine/liveExecutor';
 import { PROFILES, MAX_LEVERAGE } from '../engine/portfolio';
 import { computeLiveStats, readTrades } from '../lib/tradeLog';
 import { readState } from '../lib/liveState';
 import { readChampion } from '../orchestrator/champion';
 import { activateModel, listModels } from '../orchestrator/models';
+import {
+  PRE_NIGHTLY_TASK,
+  POST_NIGHTLY_TASK,
+  checkLiveHealth,
+  currentRunId,
+  isOrchestratorRunning,
+  recentRuns,
+  runDetail,
+  startOrchestrator,
+} from '../orchestrator/agent';
+import { readDirectives, revokeDirective } from '../orchestrator/directives';
+import { orchestratorConfigured } from '../lib/agentLlm';
+import { queueStatus } from '../engine/computeQueue';
+import { loadMeta } from '../strategy/loader';
 import { publicGet } from '../services/binanceClient';
 import * as ex from '../services/binanceOrders';
 import { readPortfolio, writePortfolio } from '../config/portfolio';
@@ -41,6 +62,13 @@ api.get('/health', async (_req, res) => {
     hasKeys: hasKeys(),
     interval: env.nightly.interval,
     nightlyCron: env.nightly.cron,
+    orchestrator: {
+      enabled: orchestratorConfigured(),
+      running: isOrchestratorRunning(),
+    },
+    // Agir is kuyrugu: gece dongusu, panel backtest'i ve orchestrator ayni CPU'yu
+    // paylasiyor. Bir kosunun neden "baslamadigini" burada gormek gerekir.
+    queue: queueStatus(),
   });
 });
 
@@ -369,8 +397,15 @@ api.post('/backtest/runs', async (req, res) => {
     const riskCells = grid
       ? buildRiskCells(grid).length
       : buildRiskCells(DEFAULT_GRID).length;
-    // fixedParams: strateji ekseni taranmaz, carpan 1'e iner.
-    const sweep = (await loadLiveChampion()).sweep;
+    /*
+     * Tavan, ISTENEN modelin ekseni uzerinden hesaplanir.
+     *
+     * Eskiden her zaman CANLI sampiyonun sweep'ine bakiliyordu; artik `modelId` ile
+     * kutuphanedeki herhangi bir model kosulabildigi icin bu yanlis modelin tavanini
+     * kontrol etmek olurdu — ve hata, kosu dakikalarca ilerledikten SONRA motorun
+     * icinden gelirdi (tam da bu kapinin onlemek icin var oldugu sey).
+     */
+    const sweep = await sweepOf(typeof b.modelId === 'string' ? b.modelId : undefined);
     const paramCells = b.fixedParams === true ? 1 : sweep.cells;
     const total = paramCells * riskCells;
 
@@ -407,6 +442,8 @@ api.post('/backtest/runs', async (req, res) => {
       initialBalance: typeof b.initialBalance === 'number' ? b.initialBalance : undefined,
       noCosts: b.noCosts === true,
       fixedParams: b.fixedParams === true,
+      ...(typeof b.modelId === 'string' ? { modelId: b.modelId } : {}),
+      ...(b.endDate ? { endDate: parseDate(b.endDate) } : {}),
       ...(grid ? { grid } : {}),
     });
     res.status(202).json({ id: job.id, status: job.status });
@@ -518,4 +555,119 @@ api.get('/reports/:name', (req, res) => {
   if (!fs.existsSync(file)) return res.status(404).json({ error: 'rapor bulunamadi' });
   res.type('text/markdown');
   return res.send(fs.readFileSync(file, 'utf8'));
+});
+
+/**
+ * Bir modelin strateji ekseni kac hucre.
+ *
+ * `modelId` verilmezse canli sampiyon (bugunku davranis). Verilirse defterden cozulur
+ * ve meta'si okunur — sha dogrulamasi listModels icinde zaten yapiliyor (models.ts:207).
+ */
+async function sweepOf(modelId: string | undefined): Promise<{ cells: number; maxCells: number }> {
+  if (!modelId) return (await loadLiveChampion()).sweep;
+
+  const m = (await listModels()).find((x) => x.id === modelId);
+  if (!m) throw new Error(`model bulunamadi: ${modelId}`);
+  if (!m.runnable) throw new Error(`${m.name} kosulamaz: ${m.blockedReason}`);
+
+  const meta = (await loadMeta(fs.readFileSync(m.codePath, 'utf8'))).meta;
+  return {
+    cells: paramCellCount(meta.params),
+    maxCells: meta.maxSweepCells ?? DEFAULT_MAX_SWEEP_CELLS,
+  };
+}
+
+/** ISO tarih ya da ms damgasi. Gecersizse HATA — sessizce "simdi"ye dusmek pencereyi degistirirdi. */
+function parseDate(raw: unknown): number {
+  const n = typeof raw === 'number' ? raw : Date.parse(String(raw));
+  if (!Number.isFinite(n)) throw new Error(`gecersiz tarih: ${String(raw)}`);
+  return n;
+}
+
+/* ------------------------------------------------------------ orchestrator --- */
+
+/**
+ * MAIN ORCHESTRATOR ucları.
+ *
+ * Bu katmanda da kural ayni: hicbir sey hesaplanmaz, motor cagrilir. Ve burada ek bir
+ * kural var — **model aktive eden bir uc YOK.** Orchestrator aday uretir, adaylar
+ * /models listesinde gorunur, aktivasyon oradaki (denetlenen) yoldan gecer.
+ */
+
+api.get('/orchestrator', (_req, res) => {
+  res.json({
+    enabled: orchestratorConfigured(),
+    provider: env.orchestrator.provider,
+    model: env.orchestrator.model,
+    running: isOrchestratorRunning(),
+    currentRunId: currentRunId(),
+    preCron: env.orchestrator.preCron,
+    postCron: env.orchestrator.postCron,
+    maxSteps: env.orchestrator.maxSteps,
+    maxBacktests: env.orchestrator.maxBacktests,
+    webSearch: env.orchestrator.webSearchProvider || null,
+    queue: queueStatus(),
+    liveHealth: checkLiveHealth(),
+  });
+});
+
+api.post('/orchestrator/run', (req, res) => {
+  const b = req.body as Record<string, unknown>;
+  const preset = typeof b.preset === 'string' ? b.preset : null;
+
+  const task =
+    preset === 'pre-nightly'
+      ? PRE_NIGHTLY_TASK
+      : preset === 'post-nightly'
+        ? POST_NIGHTLY_TASK
+        : typeof b.task === 'string' && b.task.trim()
+          ? b.task.trim()
+          : null;
+
+  if (!task) {
+    return res.status(400).json({
+      error: 'gorev gerekli: `task` metni ya da `preset` ("pre-nightly" | "post-nightly")',
+    });
+  }
+
+  try {
+    // Fire-and-forget: kosu saatler surebilir (nightly ile ayni sekil, index.ts:33).
+    const { runId } = startOrchestrator({
+      task,
+      trigger: preset === 'pre-nightly' ? 'pre-nightly' : preset === 'post-nightly' ? 'post-nightly' : 'manual',
+    });
+    return res.status(202).json({ runId, status: 'basladi' });
+  } catch (err) {
+    // 409: istek gecerli ama SU AN kabul edilemez (tek ucus) veya orchestrator kapali.
+    return res.status(409).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+api.get('/orchestrator/runs', (_req, res) => {
+  res.json({ running: isOrchestratorRunning(), currentRunId: currentRunId(), runs: recentRuns() });
+});
+
+api.get('/orchestrator/runs/:id', (req, res) => {
+  const run = runDetail(req.params.id);
+  if (!run) return res.status(404).json({ error: 'kosu bulunamadi' });
+
+  // Konusma gecmisi ciktida YOK: megabaytlarca tool ciktisi tasir ve panelin
+  // gosterdigi hicbir sey ondan gelmiyor (adimlar zaten ozetlenmis halde).
+  const { messages: _messages, ...rest } = run;
+  return res.json(rest);
+});
+
+api.get('/orchestrator/directives', (_req, res) => {
+  const now = Date.now();
+  res.json(
+    readDirectives()
+      .filter((d) => !d.revoked && (d.expiresAt === null || d.expiresAt > now))
+      .sort((a, b) => b.createdAt - a.createdAt),
+  );
+});
+
+api.delete('/orchestrator/directives/:id', (req, res) => {
+  const ok = revokeDirective(req.params.id);
+  if (!ok) return res.status(404).json({ error: 'yonlendirme bulunamadi veya zaten iptal edilmis' });
+  return res.json({ status: 'iptal edildi' });
 });

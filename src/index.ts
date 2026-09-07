@@ -3,7 +3,7 @@ import cors from 'cors';
 import express from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
-import { startLiveScheduler, startScheduler } from './orchestrator/scheduler';
+import { startLiveScheduler, startOrchestratorScheduler, startScheduler } from './orchestrator/scheduler';
 import { runNightly } from './orchestrator/nightly';
 import { readChampion } from './orchestrator/champion';
 import { api } from './api/routes';
@@ -48,4 +48,5 @@ app.listen(env.port, () => {
   console.log(`TradeCraft AI :${env.port}  (Binance ${env.binance.testnet ? 'TESTNET' : 'MAINNET'})`);
   startScheduler();
   startLiveScheduler();
+  startOrchestratorScheduler();
 });

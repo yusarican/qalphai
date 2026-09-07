@@ -1,5 +1,15 @@
 import cron from 'node-cron';
 import { runNightly } from './nightly';
+import {
+  PRE_NIGHTLY_TASK,
+  POST_NIGHTLY_TASK,
+  autopsyTask,
+  checkLiveHealth,
+  currentRunId,
+  isOrchestratorRunning,
+  startOrchestrator,
+} from './agent';
+import { orchestratorConfigured } from '../lib/agentLlm';
 import { runLiveOnce } from '../engine/liveExecutor';
 import { currentDecisionBar } from '../engine/liveDecider';
 import { formatDecisionReport } from '../engine/liveReport';
@@ -43,6 +53,61 @@ export function startScheduler(): void {
   );
 
   console.log(`[gece] zamanlandi: ${env.nightly.cron} (UTC)`);
+}
+
+/**
+ * ORCHESTRATOR ZAMANLAYICISI — gece dongusunun ONCESI ve SONRASI.
+ *
+ * Iki ayri kosu, cunku iki ayri soru:
+ *
+ *   pre  (varsayilan 01:00 UTC, gece dongusunden 1.5 saat once)
+ *        "Bu gece neye bakilmali?" — canliyi ve kutuphaneyi okur, gecenin arastirmasina
+ *        yon verir (orchestrator/directives.ts). Enjeksiyonun etkili olmasi icin gece
+ *        dongusunden ONCE kosmasi SART: sonra kosarsa yonlendirme bir sonraki geceye
+ *        kalir ve teshis ile mudahale arasinda 24 saat olur.
+ *
+ *   post (varsayilan 06:30 UTC, gece dongusu bittikten sonra)
+ *        "Bu gece ne uretildi ve iyi mi?" — raporu ve adayi okur, Codex'in gozunden
+ *        kacani arar, gerekirse varyant uretir.
+ *
+ * Ikisi de ayni tek-ucus kilidini paylasir (agent/index.ts): pre uzarsa post atlanir.
+ * UTC'ye sabitli, gece dongusuyle ayni gerekce (bkz. dosya basi).
+ *
+ * ORCH_ENABLED kapaliysa HIC ZAMANLANMAZ — sistem bugunku davranisini bit bit korur.
+ */
+export function startOrchestratorScheduler(): void {
+  if (!orchestratorConfigured()) {
+    console.log('[orchestrator] kapali (ORCH_ENABLED / ORCH_API_KEY) — zamanlanmadi');
+    return;
+  }
+
+  const schedule = (expr: string, trigger: 'pre-nightly' | 'post-nightly', task: string): void => {
+    cron.schedule(
+      expr,
+      () => {
+        if (isOrchestratorRunning()) {
+          console.warn(`[orchestrator] onceki kosu (${currentRunId()}) suruyor, ${trigger} atlandi`);
+          return;
+        }
+        try {
+          const { runId } = startOrchestrator({ task, trigger });
+          console.log(`[orchestrator] ${trigger} basladi: ${runId}`);
+        } catch (err) {
+          // Baslatilamayan bir kosu, sistemin geri kalanini DURDURMAZ.
+          console.error(`[orchestrator] ${trigger} baslatilamadi:`, err instanceof Error ? err.message : err);
+        }
+      },
+      { timezone: 'Etc/UTC' },
+    );
+  };
+
+  schedule(env.orchestrator.preCron, 'pre-nightly', PRE_NIGHTLY_TASK);
+  schedule(env.orchestrator.postCron, 'post-nightly', POST_NIGHTLY_TASK);
+
+  console.log(
+    `[orchestrator] zamanlandi: pre ${env.orchestrator.preCron} / post ${env.orchestrator.postCron} (UTC), ` +
+      `${env.orchestrator.provider}/${env.orchestrator.model}`,
+  );
 }
 
 /**
@@ -130,6 +195,34 @@ function catchUpOnBoot(interval: CandleInterval): void {
 }
 
 /**
+ * Canli performans esigi asildiysa otopsi baslatir.
+ *
+ * Neden BURADA: esik ancak bir islem KAPANDIGINDA degisebilir ve islemler canli kosuda
+ * kapanir. Ayri bir cron kursaydik ya gec kalirdi ya da hicbir sey degismemisken bosuna
+ * kosardi.
+ *
+ * DEFTERE VE EMIRLERE DOKUNMAZ. Otopsi yalnizca olcer ve rapor yazar; en fazla bir aday
+ * uretir ve o da /models sayfasinda operatorun onayini bekler. Yani en kotu durumda
+ * bosa harcanmis CPU — asla yanlis bir pozisyon.
+ */
+function maybeTriggerAutopsy(): void {
+  if (!orchestratorConfigured() || isOrchestratorRunning()) return;
+
+  try {
+    const health = checkLiveHealth();
+    if (!health.breached) return;
+
+    const { runId } = startOrchestrator({ task: autopsyTask(health), trigger: 'live-threshold' });
+    console.warn(
+      `[canli] PERFORMANS ESIGI ASILDI -> otopsi basladi (${runId}): ${health.reasons.join('; ')}`,
+    );
+  } catch (err) {
+    // Otopsi baslatilamamasi CANLI KOSUYU etkilemez.
+    console.error('[canli] otopsi baslatilamadi:', err instanceof Error ? err.message : err);
+  }
+}
+
+/**
  * Tek bir canli kosu — cron da acilis yakalamasi da BURADAN gecer.
  *
  * Tek giris noktasi olmasi `liveRunning` kilidini anlamli kilar: iki farkli tetikleyici
@@ -158,6 +251,8 @@ function runLiveTick(trigger: string): void {
       for (const d of res.divergences) {
         console.warn(`[canli] IRAKSAMA: ${d.symbol} ${d.side} — ${d.reason} (backtest bunu ALIRDI)`);
       }
+
+      maybeTriggerAutopsy();
     })
     .catch((err) => {
       // Canli kosu duserse SAMPIYONA VE DEFTERE DOKUNULMAZ. Bir sonraki mumda

@@ -60,6 +60,7 @@ const NAV = [
   { href: "/models", label: "Models" },
   { href: "/portfolio", label: "Portfolio" },
   { href: "/backtest", label: "Backtest" },
+  { href: "/orchestrator", label: "Orchestrator" },
   { href: "/reports", label: "Reports" },
 ] as const
 

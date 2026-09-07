@@ -6,6 +6,8 @@
  * fikir bulamaz hale gelir. Rotasyon, arama yuzeyini genisletir.
  */
 
+import { activeDirectives } from '../orchestrator/directives';
+
 export interface ArxivQuery {
   name: string;
   query: string;
@@ -56,10 +58,43 @@ export const QUERIES: ArxivQuery[] = [
   },
 ];
 
-/** Gecelik rotasyon: gun sayisina gore sirayla. Ilk iki sorgu her gece kosar (cekirdek). */
+/**
+ * Gecelik rotasyon: gun sayisina gore sirayla. Ilk iki sorgu her gece kosar (cekirdek).
+ *
+ * Orchestrator bir yonlendirme birakmissa (orchestrator/directives.ts) o gecenin
+ * listesine EK sorgular girer — rotasyonun yerine gecmez, YANINA eklenir. Sebep:
+ * ust aklin bir hipotezi olmasi, cekirdek taramayi durdurmayi gerektirmez; ikisi ayni
+ * havuza akar ve secim yine tum havuz uzerinde yapilir (selector.ts:28).
+ *
+ * Yonlendirme yoksa donen liste bugunkuyle BIREBIR aynidir.
+ */
 export function queriesForNight(dayIndex: number): ArxivQuery[] {
   const core = QUERIES.slice(0, 2);
   const rotating = QUERIES.slice(2);
   const pick = rotating[dayIndex % rotating.length]!;
-  return [...core, pick];
+  return [...core, pick, ...directedQueries()];
+}
+
+/**
+ * Yonlendirmeden gelen sorgular.
+ *
+ * Metin ONCEDEN URL-KODLANMIS bir arXiv sorgusu olmali (arxiv.ts:76-83: axios'un
+ * `params`i %22'yi cift kodluyor ve sorgu sessizce SIFIR makale donduruyor). Bu yuzden
+ * kodlanmamis gorunen bir metin sessizce atlanmaz — konsola yazilir. Sessiz atlama,
+ * "orchestrator yon verdi ama gece hicbir sey degismedi" gibi tesadufi bir sonuc
+ * uretirdi ve nedeni gunlerce aranirdi.
+ */
+function directedQueries(): ArxivQuery[] {
+  const out: ArxivQuery[] = [];
+
+  for (const d of activeDirectives('arxiv-queries')) {
+    const q = d.text.trim();
+    if (/\s/.test(q)) {
+      console.log(`     [yonlendirme] arXiv sorgusu atlandi (bosluk iceriyor, URL-kodlanmis olmali): ${q.slice(0, 80)}`);
+      continue;
+    }
+    out.push({ name: `yonlendirme:${d.id}`, query: q });
+  }
+
+  return out;
 }

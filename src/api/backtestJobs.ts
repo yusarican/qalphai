@@ -2,11 +2,13 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { challenge } from '../engine/challenge';
+import { runExclusive } from '../engine/computeQueue';
 import { DEFAULT_GRID, type GridSpec } from '../engine/backtest';
 import { DEFAULT_COSTS, ZERO_COSTS } from '../engine/costModel';
 import { ensureDataset } from '../engine/dataset';
 import { DQ_LABELS, type DqReason } from '../engine/gridScoring';
-import { loadChampionSource, readChampion } from '../orchestrator/champion';
+import { loadChampionSource, readChampion, sha256 } from '../orchestrator/champion';
+import { listModels } from '../orchestrator/models';
 import { loadMeta } from '../strategy/loader';
 import mechanicalV0 from '../strategy/builtin/mechanicalV0';
 import { DATA_DIR, env, type CandleInterval } from '../config/env';
@@ -51,6 +53,25 @@ export interface BacktestParams {
    * diye gosterirdi).
    */
   grid?: GridSpec;
+
+  /**
+   * KUTUPHANEDEKI HERHANGI BIR MODEL — `listModels()` id'si (panel /models satirlari).
+   *
+   * Verilmezse bugunku davranis: canlida olan sampiyon (yoksa builtin). Bu alan
+   * olmadan motorun tek backtest ucu "yalnizca sampiyon" demekti; oysa bir modelin
+   * baseline olup olmamasi, ona backtest kosmak icin bir sart DEGIL. Otopsi de,
+   * "kutuphanedeki su aday gelistirilse baseline'i gecer mi" sorusu da bu alandan gecer.
+   */
+  modelId?: string;
+
+  /**
+   * Pencerenin BITISI. Verilmezse simdi.
+   *
+   * Otopsi icin sart: "su modelde 2025 Mayis-Temmuz arasinda ne oldu" sorusu, gecmiste
+   * biten bir pencere ister. Eskiden aralik her zaman `now - days` idi ve gecmis bir
+   * donemi incelemenin HICBIR yolu yoktu.
+   */
+  endDate?: number;
 }
 
 /** Grid ekseni — heatmap'in satir/sutun/panel/sayfa duzenini bu liste belirler. */
@@ -248,6 +269,8 @@ export function startBacktest(input: Partial<BacktestParams>): BacktestJob {
     initialBalance: input.initialBalance ?? 10_000,
     noCosts: input.noCosts ?? false,
     fixedParams: input.fixedParams ?? false,
+    ...(input.modelId ? { modelId: input.modelId } : {}),
+    ...(input.endDate ? { endDate: input.endDate } : {}),
     // Verilmediyse alan HIC yazilmaz (undefined yerine yok) — sonuc JSON'u "grid: null"
     // diye kaydedip sonradan "operator bos grid istedi" gibi okunmasin.
     ...(input.grid ? { grid: input.grid } : {}),
@@ -259,7 +282,10 @@ export function startBacktest(input: Partial<BacktestParams>): BacktestJob {
     id,
     status: 'running',
     params,
-    strategyName: readChampion()?.name ?? 'Mekanik Tier-Composite v0 (builtin)',
+    // Model adi kosu BASLARKEN kesinlesmez (listModels asenkron). Cozulunce execute()
+    // uzerine yazar. Panelin "hangi strateji" sorusunu belirsiz birakmamasi icin
+    // gecici deger de dogru olmali: modelId verildiyse onu yaz, verilmediyse sampiyonu.
+    strategyName: params.modelId ?? readChampion()?.name ?? 'Mekanik Tier-Composite v0 (builtin)',
     startedAt: Date.now(),
     stage: 'baslatiliyor',
     done: 0,
@@ -282,16 +308,63 @@ export function startBacktest(input: Partial<BacktestParams>): BacktestJob {
   return job;
 }
 
+/**
+ * Kosulacak modeli cozer.
+ *
+ * `modelId` verilmediyse bugunku davranis birebir korunur: canlidaki sampiyon, yoksa
+ * builtin v0. Verildiyse defterden (models.ts) cozulur ve sha DOGRULANIR — panelden
+ * gelen bir id, diskteki kodun degismedigi anlamina gelmez (models.ts:440 ile ayni
+ * gerekce: listeleme ile kosu arasindaki pencere kucuk ama sifir degil).
+ */
+async function resolveModel(params: BacktestParams): Promise<{
+  source: string;
+  strategy: Awaited<ReturnType<typeof loadMeta>>;
+  sandboxed: boolean;
+  name: string;
+  fixedParams: Record<string, number | boolean> | null;
+}> {
+  if (!params.modelId) {
+    const rec = readChampion();
+    const source = rec
+      ? loadChampionSource(rec)
+      : fs.readFileSync('src/strategy/builtin/mechanicalV0.ts', 'utf8');
+    return {
+      source,
+      strategy: rec ? await loadMeta(source) : mechanicalV0(),
+      sandboxed: rec !== null,
+      name: rec?.name ?? 'Mekanik Tier-Composite v0 (builtin)',
+      fixedParams: rec?.params ?? null,
+    };
+  }
+
+  const model = (await listModels()).find((m) => m.id === params.modelId);
+  if (!model) throw new Error(`model bulunamadi: ${params.modelId}`);
+  if (!model.runnable) throw new Error(`${model.name} kosulamaz: ${model.blockedReason}`);
+
+  const source = fs.readFileSync(model.codePath, 'utf8');
+  if (model.codeSha256 && sha256(source) !== model.codeSha256) {
+    throw new Error(`${model.name}: kod listelendikten sonra degisti, kosu iptal`);
+  }
+
+  return {
+    source,
+    // Builtin BIZIM kodumuz; sandbox'a gerek yok ve gereksiz serilestirmeden kacinilir.
+    // Digerleri Codex'in yazdigi koddur ve HER ZAMAN realm'de kosar.
+    strategy: model.origin === 'builtin' ? mechanicalV0() : await loadMeta(source),
+    sandboxed: model.origin !== 'builtin',
+    name: model.name,
+    fixedParams: Object.keys(model.params).length > 0 ? model.params : null,
+  };
+}
+
 async function execute(job: BacktestJob): Promise<void> {
   const { params } = job;
-  const rec = readChampion();
 
-  // Sampiyon promote edilmisse ONUN kodu kosar (sha dogrulanarak); yoksa builtin v0.
-  // Panel "hangi strateji" sorusunu asla belirsiz birakmamali — isim sonuca yazilir.
-  const source = rec ? loadChampionSource(rec) : fs.readFileSync('src/strategy/builtin/mechanicalV0.ts', 'utf8');
-  const strategy = rec ? await loadMeta(source) : mechanicalV0();
+  const model = await resolveModel(params);
+  const { source, strategy } = model;
+  job.strategyName = model.name;
 
-  const endDate = Date.now();
+  const endDate = params.endDate ?? Date.now();
   const startDate = endDate - params.days * DAY_MS;
 
   // --- Veri senkronu. Gece dongusu bunu kendi yapiyor; panel yapmiyordu ve bu yuzden
@@ -311,12 +384,15 @@ async function execute(job: BacktestJob): Promise<void> {
     },
   });
 
-  const res = await challenge({
+  // Grid dakikalar surer ve CPU'yu doyurur. Kuyruk, gece dongusu ve orchestrator ile
+  // ayni CPU'yu paylasmayi acik hale getiriyor (engine/computeQueue.ts). `running`
+  // bayragi DURUYOR: o "panelden ikinci bir kosu baslatilamaz" demek, kuyruk ise
+  // "uc talep sahibi ayni anda kosamaz" demek — farkli iki sart.
+  const res = await runExclusive('panel-backtest', `${model.name} / ${params.days}g`, () =>
+    challenge({
     strategy,
     source,
-    // Builtin bizim kodumuz — izole etmeye gerek yok. Promote edilmis aday Codex'in
-    // yazdigi koddur ve HER ZAMAN sandbox'ta kosar.
-    sandboxed: rec !== null,
+    sandboxed: model.sandboxed,
     symbols: params.symbols,
     interval: params.interval,
     startDate,
@@ -331,13 +407,16 @@ async function execute(job: BacktestJob): Promise<void> {
     // durumda bayrak sessizce yutuluyor, grid yine taraniyordu ve panel gene de
     // "FIXED PARAMS" rozetini gosteriyordu. Panel, motorun yaptigindan baska bir sey
     // soylemez.
-    ...(params.fixedParams ? { fixedParams: rec?.params ?? defaultParamsOf(strategy) } : {}),
+    ...(params.fixedParams
+      ? { fixedParams: model.fixedParams ?? defaultParamsOf(strategy) }
+      : {}),
     onProgress: (stage, done, total) => {
       job.stage = stage;
       job.done = done;
       job.total = total;
     },
-  });
+    }),
+  );
 
   if (!res.ok || !res.selection || !res.evaluated) {
     throw new Error(res.failure ?? 'backtest sonuc uretmedi');
@@ -464,7 +543,14 @@ function thin<T>(rows: T[], max: number): T[] {
   if (rows.length <= max) return rows;
   const step = rows.length / max;
   const out: T[] = [];
-  for (let i = 0; i < max - 1; i++) out.push(rows[Math.floor(i * step)]);
-  out.push(rows[rows.length - 1]);
+  for (let i = 0; i < max - 1; i++) {
+    // Indeks her zaman sinirlar icinde (i < max-1 ve step = len/max), ama tip duzeyinde
+    // bunu ispatlayamayiz; `undefined` gelirse noktayi ATLAMAK, egriye `undefined`
+    // koymaktan iyidir — panel bir noktayi kaybeder, egriyi kaybetmez.
+    const row = rows[Math.floor(i * step)];
+    if (row !== undefined) out.push(row);
+  }
+  const last = rows[rows.length - 1];
+  if (last !== undefined) out.push(last);
   return out;
 }

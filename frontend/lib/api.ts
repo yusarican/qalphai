@@ -539,6 +539,105 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T
 }
 
+/* ----------------------------------------------------------- orchestrator --- */
+
+export type DirectiveTarget =
+  | "arxiv-queries"
+  | "paper-triage"
+  | "paper-final"
+  | "codex-new"
+  | "codex-refine"
+
+export interface Directive {
+  id: string
+  target: DirectiveTarget
+  text: string
+  rationale: string
+  createdAt: number
+  expiresAt: number | null
+  createdBy: "orchestrator" | "operator"
+  runId: string
+  revoked: boolean
+}
+
+export interface QueueEntry {
+  id: number
+  kind: "nightly" | "panel-backtest" | "orchestrator"
+  label: string
+  enqueuedAt: number
+  startedAt?: number | null
+}
+
+export interface QueueStatus {
+  active: QueueEntry | null
+  waiting: QueueEntry[]
+  depth: number
+}
+
+export interface LiveHealth {
+  breached: boolean
+  reasons: string[]
+  stats: {
+    trades: number
+    expectancyR: number
+    totalPnl: number
+    consecutiveLosses: number
+  }
+}
+
+export interface OrchestratorStatus {
+  enabled: boolean
+  provider: string
+  model: string
+  running: boolean
+  currentRunId: string | null
+  preCron: string
+  postCron: string
+  maxSteps: number
+  maxBacktests: number
+  webSearch: string | null
+  queue: QueueStatus
+  liveHealth: LiveHealth
+}
+
+export interface RunStep {
+  n: number
+  at: number
+  text: string
+  toolCalls: Array<{
+    name: string
+    input: unknown
+    ok: boolean
+    summary: string
+    ms: number
+  }>
+  usage: { inTokens: number; outTokens: number }
+}
+
+export interface OrchestratorRunSummary {
+  id: string
+  task: string
+  trigger: "pre-nightly" | "post-nightly" | "manual" | "live-threshold"
+  status: "running" | "done" | "failed" | "stopped"
+  startedAt: number
+  finishedAt?: number
+  provider: string
+  model: string
+  tokensUsed: number
+  backtestsRun: number
+  summary?: string
+  error?: string
+  /** Candidate ids the run produced. None of them is live — activation stays manual. */
+  producedCandidates: string[]
+  directives: string[]
+  reportPath?: string
+  stepCount: number
+}
+
+export type OrchestratorRun = Omit<OrchestratorRunSummary, "stepCount"> & {
+  steps: RunStep[]
+}
+
 export const api = {
   health: () => request<Health>("/health"),
   overview: () => request<Overview>("/overview"),
@@ -587,6 +686,42 @@ export const api = {
    * as soon as the run is accepted, not when it finishes.
    */
   runNightly: () => request<{ status: string }>("/nightly/run", { method: "POST" }),
+
+  /**
+   * The orchestrator's status: whether it is configured, what it is running, and the
+   * shared compute queue behind it. Cheap — reads configuration and local files only.
+   */
+  orchestrator: () => request<OrchestratorStatus>("/orchestrator"),
+
+  /**
+   * Start an orchestrator run. Fire-and-forget: a run can take hours, so this returns
+   * as soon as the run is accepted.
+   *
+   * There is deliberately **no** way to activate a model from here, or from anywhere
+   * the orchestrator can reach. It produces candidates; a human promotes them on
+   * /models. That is a structural limit in the engine, not a rule of this UI.
+   */
+  runOrchestrator: (body: { task?: string; preset?: "pre-nightly" | "post-nightly" }) =>
+    request<{ runId: string; status: string }>("/orchestrator/run", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  orchestratorRuns: () =>
+    request<{
+      running: boolean
+      currentRunId: string | null
+      runs: OrchestratorRunSummary[]
+    }>("/orchestrator/runs"),
+
+  orchestratorRun: (id: string) =>
+    request<OrchestratorRun>(`/orchestrator/runs/${encodeURIComponent(id)}`),
+
+  directives: () => request<Directive[]>("/orchestrator/directives"),
+  revokeDirective: (id: string) =>
+    request<{ status: string }>(`/orchestrator/directives/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    }),
 
   reports: () => request<string[]>("/reports"),
   report: async (name: string) => {
